@@ -1,0 +1,7 @@
+node_modules/
+out/
+*.log
+.DS_Store
+
+# 個人のパス・メール・owner を含むので無視（雛形は config.example.ts）
+config.ts

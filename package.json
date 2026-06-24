@@ -1,0 +1,19 @@
+{
+  "name": "gamify",
+  "version": "0.1.0",
+  "description": "個人開発のモチベ維持ダッシュボード。git/gh の活動を RPG 風に集計して HTML + ターミナルに出力する。",
+  "type": "module",
+  "scripts": {
+    "dev:stats": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
