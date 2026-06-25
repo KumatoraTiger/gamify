@@ -33,8 +33,13 @@ export function renderTerminal(projectName: string, r: DevReport): string {
   const unlocked = r.badges.filter((b) => b.unlocked).length
   const lines: string[] = []
 
+  const ch = r.character
   lines.push('')
   lines.push(`  ${c.gold}${c.bold}${projectName}${c.reset}  ${c.dim}/ dev cockpit${c.reset}`)
+  lines.push(
+    `  ${ch.jobIcon} ${c.bold}${ch.fullName}${c.reset}  ` +
+      `${c.dim}${ch.equipment.map((e) => `${e.icon}${e.name}`).join(' · ')}${c.reset}`,
+  )
   lines.push(
     `  ${c.gold}Lv.${lv.level}${c.reset}  ${c.gold}${bar(lv.progress)}${c.reset}  ` +
       `${c.dim}EXP ${lv.totalExp} / ${lv.nextLevelAt}（次まで ${lv.toNext}）${c.reset}`,
@@ -59,6 +64,17 @@ export function renderTerminal(projectName: string, r: DevReport): string {
         `${c.dim}（クリアEXP +${q.clearedExp}）${c.reset}`,
     )
   }
+  const j = r.journey
+  const legText = j.next
+    ? `${bar(j.progressInStage, 16)} ${c.dim}→ ${j.next.icon}${j.next.name}${c.reset}`
+    : `${c.gold}最終地点に到達！${c.reset}`
+  lines.push(
+    `  ${c.teal}🗺 冒険${c.reset} ${j.current.icon}${c.bold}${j.current.name}${c.reset}  ${legText}`,
+  )
+  lines.push(
+    `  ${c.teal}🏙 街${c.reset} ${r.city.built}/${r.city.total} 棟  ` +
+      `${c.dim}${r.city.buildings.map((b) => (b.built ? b.icon : '🚧')).join(' ')}${c.reset}`,
+  )
   lines.push(
     `  ${c.dim}総コミット ${r.totalCommits} · マージPR ${r.mergedPRs} · リリース ${r.releases}` +
       (r.daysSinceStart != null ? ` · 開始から ${r.daysSinceStart}日` : '') +

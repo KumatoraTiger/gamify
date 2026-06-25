@@ -4,7 +4,10 @@
  */
 
 import { type BadgeStatus, evaluateBadges } from './badges'
+import { type Character, buildCharacter } from './character'
+import { type CityState, buildCity } from './city'
 import type { ExpRules, GamifyConfig } from './config-types'
+import { type JourneyState, buildJourney } from './journey'
 import { type LevelInfo, levelFromExp } from './level'
 import type { QuestBoard } from './quests'
 import { countWithin, dailyCounts } from './stats'
@@ -38,6 +41,12 @@ export interface DevReport {
   questExp: number
   badges: BadgeStatus[]
   questBoard?: QuestBoard
+  /** RPG 演出: キャラ・装備・ジョブ */
+  character: Character
+  /** RPG 演出: 冒険マップ（ステージ進行） */
+  journey: JourneyState
+  /** RPG 演出: 街（バッジ解放の建物） */
+  city: CityState
 }
 
 export function computeTotalExp(
@@ -90,15 +99,28 @@ export function buildReport(config: GamifyConfig, raw: RawData): DevReport {
     daysSinceStart = Math.max(0, Math.floor((raw.today.getTime() - start.getTime()) / 86_400_000))
   }
 
+  const level = levelFromExp(totalExp, config.levelCurve)
+  const longest = longestStreak(dayKeys)
+
+  const character = buildCharacter({
+    level: level.level,
+    totalCommits,
+    mergedPRs,
+    releases: raw.releases,
+    longestStreak: longest,
+  })
+  const journey = buildJourney(level.level, level.progress)
+  const city = buildCity(badges)
+
   return {
     generatedAt: raw.today,
     daysSinceStart,
     totalCommits,
     totalExp,
     weekExp,
-    level: levelFromExp(totalExp, config.levelCurve),
+    level,
     currentStreak: currentStreak(dayKeys, raw.today),
-    longestStreak: longestStreak(dayKeys),
+    longestStreak: longest,
     weekCommits,
     weekPRs,
     dailyCommitCounts: dailyCounts(raw.commitDates, raw.today, 7),
@@ -107,5 +129,8 @@ export function buildReport(config: GamifyConfig, raw: RawData): DevReport {
     questExp,
     badges,
     questBoard: raw.questBoard,
+    character,
+    journey,
+    city,
   }
 }
