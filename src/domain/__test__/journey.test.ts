@@ -37,6 +37,13 @@ describe('buildJourney', () => {
     ])
   })
 
+  it('各ステージに地形が割り当てられている', () => {
+    const terrains = DEFAULT_STAGES.map((s) => s.terrain)
+    expect(terrains).toEqual(['village', 'forest', 'harbor', 'pass', 'mountain', 'castle', 'peak'])
+    // current にも terrain が伝播している
+    expect(buildJourney(10, 0).current.terrain).toBe('harbor')
+  })
+
   it('Lv.1 ははじまりの村（最初のステージ）', () => {
     const j = buildJourney(1, 0)
     expect(j.currentIndex).toBe(0)

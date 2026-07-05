@@ -6,7 +6,7 @@
 
 import type { Character } from '../domain/character'
 import type { CityState } from '../domain/city'
-import type { JourneyState } from '../domain/journey'
+import type { JourneyState, Terrain } from '../domain/journey'
 import type { Momentum } from '../domain/momentum'
 import type { DevReport } from '../domain/report'
 
@@ -147,31 +147,184 @@ function overworld(j: JourneyState): string {
   return `<div class="routewrap"><div class="route">${nodes}</div></div>`
 }
 
-// 登山ルートの折れ線（固定アンカーを線形補間）
-const CLIMB: ReadonlyArray<readonly [number, number]> = [
-  [40, 205],
-  [140, 176],
-  [240, 150],
-  [320, 128],
-  [400, 100],
-  [470, 72],
-  [545, 42],
+/* --- ステージ内マップ: 地形テーマ（背景シーン＋道の形）--- */
+type Pt = readonly [number, number]
+interface MapTheme {
+  /** 道のアンカー（左→ゴール手前）。線形補間で YOU/チェックポイントを配置 */
+  path: readonly Pt[]
+  /** 背景シーン（道より奥に描く SVG） */
+  bg: string
+}
+
+// 松の木（2段の三角＋幹）
+const pine = (x: number, y: number, h: number, w: number, fill: string): string =>
+  `<polygon points="${x},${y - h} ${x - w},${y} ${x + w},${y}" fill="${fill}"/>` +
+  `<polygon points="${x},${y - h * 1.5} ${x - w * 0.66},${y - h * 0.5} ${x + w * 0.66},${y - h * 0.5}" fill="${fill}"/>` +
+  `<rect x="${x - 1.5}" y="${y}" width="3" height="7" fill="#4a3a24"/>`
+
+const FOREST_PINES: ReadonlyArray<readonly [number, number, number, number, string]> = [
+  [70, 178, 34, 20, '#25452f'],
+  [150, 186, 46, 26, '#2f5a3a'],
+  [250, 176, 30, 18, '#22402c'],
+  [360, 190, 52, 30, '#356b45'],
+  [455, 180, 38, 22, '#2a5236'],
+  [545, 186, 48, 28, '#2f5a3a'],
+  [200, 168, 24, 15, '#1f3a29'],
+  [420, 166, 22, 14, '#1f3a29'],
 ]
-function pointAt(f: number): [number, number] {
-  const t = Math.max(0, Math.min(1, f)) * (CLIMB.length - 1)
-  const i = Math.min(CLIMB.length - 2, Math.floor(t))
-  const a = CLIMB[i] as readonly [number, number]
-  const b = CLIMB[i + 1] as readonly [number, number]
+
+const MAP_THEMES: Record<Terrain, MapTheme> = {
+  village: {
+    path: [
+      [30, 188],
+      [130, 180],
+      [235, 186],
+      [335, 172],
+      [430, 178],
+      [510, 164],
+      [562, 156],
+    ],
+    bg: `
+      <defs><linearGradient id="tg-village" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#33502f"/><stop offset="1" stop-color="#1d2a1b"/></linearGradient></defs>
+      <circle cx="72" cy="46" r="20" fill="#E6B450" opacity="0.16"/>
+      <path d="M0,230 L0,168 Q170,148 340,164 T620,158 L620,230 Z" fill="url(#tg-village)"/>
+      <rect x="70" y="130" width="42" height="36" fill="#3c3a52"/><polygon points="65,130 91,108 117,130" fill="#b5613f"/>
+      <rect x="86" y="146" width="11" height="20" fill="#25233a"/>
+      <rect x="122" y="140" width="30" height="26" fill="#34324a"/><polygon points="118,140 137,122 156,140" fill="#a3543a"/>
+      <g stroke="#5a4530" stroke-width="2"><line x1="28" y1="172" x2="28" y2="160"/><line x1="40" y1="173" x2="40" y2="161"/><line x1="52" y1="174" x2="52" y2="162"/><line x1="26" y1="166" x2="54" y2="167"/></g>
+      ${pine(516, 168, 30, 18, '#2f5a3a')}${pine(560, 172, 26, 16, '#356b45')}`,
+  },
+  forest: {
+    path: [
+      [30, 196],
+      [120, 172],
+      [215, 190],
+      [315, 166],
+      [410, 186],
+      [495, 162],
+      [562, 150],
+    ],
+    bg: `
+      <defs><linearGradient id="tg-forest" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#243d2b"/><stop offset="1" stop-color="#152018"/></linearGradient></defs>
+      <path d="M0,230 L0,172 Q310,158 620,174 L620,230 Z" fill="url(#tg-forest)"/>
+      ${FOREST_PINES.map((p) => pine(p[0], p[1], p[2], p[3], p[4])).join('')}`,
+  },
+  harbor: {
+    path: [
+      [30, 164],
+      [125, 158],
+      [225, 150],
+      [330, 140],
+      [430, 128],
+      [512, 116],
+      [562, 106],
+    ],
+    bg: `
+      <defs><linearGradient id="tg-harbor" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#2a5670"/><stop offset="1" stop-color="#12293a"/></linearGradient></defs>
+      <polygon points="430,178 495,120 560,178" fill="#2c3a4a"/><polygon points="510,178 570,132 620,178" fill="#26333f"/>
+      <rect x="0" y="178" width="620" height="52" fill="url(#tg-harbor)"/>
+      <g stroke="#4a7f9a" stroke-width="1.4" opacity="0.45" fill="none">
+        <path d="M30,196 q14,-6 28,0 t28,0 t28,0"/><path d="M330,208 q14,-6 28,0 t28,0 t28,0"/><path d="M150,214 q14,-6 28,0 t28,0"/></g>
+      <rect x="34" y="172" width="150" height="6" fill="#6b4f30"/>
+      <g fill="#4a3720"><rect x="48" y="178" width="5" height="22"/><rect x="108" y="178" width="5" height="22"/><rect x="170" y="178" width="5" height="22"/></g>
+      <path d="M244,182 q30,20 60,0 Z" fill="#7a4a2a"/><rect x="272" y="150" width="3" height="32" fill="#5a4530"/><polygon points="275,152 275,178 300,166" fill="#d8d2c4"/>
+      <rect x="454" y="146" width="13" height="32" fill="#c9c2d8"/><rect x="452" y="140" width="17" height="7" fill="#b5613f"/><circle cx="460.5" cy="136" r="4" fill="#E6B450" opacity="0.85"/>`,
+  },
+  pass: {
+    path: [
+      [30, 196],
+      [120, 176],
+      [220, 184],
+      [320, 150],
+      [412, 158],
+      [492, 118],
+      [560, 98],
+    ],
+    bg: `
+      <defs><linearGradient id="tg-pass" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#3a4152"/><stop offset="1" stop-color="#20242f"/></linearGradient></defs>
+      <polygon points="0,230 90,120 195,178 305,88 435,150 545,66 620,138 620,230" fill="url(#tg-pass)"/>
+      <polygon points="305,88 289,116 321,116" fill="#dfe6ee" opacity="0.7"/><polygon points="545,66 531,92 559,92" fill="#dfe6ee" opacity="0.7"/>
+      <g fill="#c9d2dc">
+        <ellipse cx="180" cy="164" rx="130" ry="15" opacity="0.10"/>
+        <ellipse cx="470" cy="132" rx="140" ry="13" opacity="0.09"/>
+        <rect x="0" y="150" width="620" height="12" opacity="0.07"/></g>`,
+  },
+  mountain: {
+    path: [
+      [40, 205],
+      [140, 176],
+      [240, 150],
+      [320, 128],
+      [400, 100],
+      [470, 72],
+      [545, 42],
+    ],
+    bg: `
+      <defs><linearGradient id="tg-mtn" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#3a4256"/><stop offset="1" stop-color="#222838"/></linearGradient></defs>
+      <polygon points="0,230 150,150 320,108 470,62 545,38 620,230" fill="url(#tg-mtn)"/>
+      <polygon points="545,38 522,70 575,70" fill="#e8edf5" opacity="0.85"/>`,
+  },
+  castle: {
+    path: [
+      [30, 190],
+      [122, 168],
+      [220, 152],
+      [320, 136],
+      [412, 112],
+      [492, 86],
+      [556, 62],
+    ],
+    bg: `
+      <defs><linearGradient id="tg-castle" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#2a2b52"/><stop offset="1" stop-color="#171826"/></linearGradient></defs>
+      <rect x="0" y="0" width="620" height="230" fill="url(#tg-castle)" opacity="0.55"/>
+      <g fill="#E6B450" opacity="0.5"><circle cx="80" cy="40" r="1.4"/><circle cx="210" cy="28" r="1.1"/><circle cx="330" cy="50" r="1.4"/><circle cx="460" cy="32" r="1.1"/></g>
+      <g fill="#3a3d5c" opacity="0.6"><ellipse cx="120" cy="122" rx="62" ry="16"/><ellipse cx="360" cy="150" rx="82" ry="18"/><ellipse cx="520" cy="112" rx="58" ry="15"/></g>
+      <g fill="#2f3450"><ellipse cx="130" cy="192" rx="48" ry="12"/><ellipse cx="330" cy="152" rx="44" ry="11"/></g>
+      <g fill="#454a72"><rect x="520" y="42" width="62" height="38"/><rect x="514" y="30" width="10" height="14"/><rect x="536" y="26" width="10" height="18"/><rect x="558" y="30" width="10" height="14"/><rect x="578" y="30" width="8" height="14"/></g>
+      <polygon points="536,26 541,14 546,26" fill="#E6B450"/>`,
+  },
+  peak: {
+    // 竜の頂は最終ステージ。next が無いためマップは描かれない（フォールバック用に mountain を流用）
+    path: [
+      [40, 205],
+      [140, 176],
+      [240, 150],
+      [320, 128],
+      [400, 100],
+      [470, 72],
+      [545, 42],
+    ],
+    bg: `
+      <defs><linearGradient id="tg-peak" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#4a3a4a"/><stop offset="1" stop-color="#241a24"/></linearGradient></defs>
+      <polygon points="0,230 150,150 320,108 470,62 545,38 620,230" fill="url(#tg-peak)"/>
+      <polygon points="545,38 522,70 575,70" fill="#e8edf5" opacity="0.85"/>`,
+  },
+}
+
+function pointAt(path: readonly Pt[], f: number): [number, number] {
+  const t = Math.max(0, Math.min(1, f)) * (path.length - 1)
+  const i = Math.min(path.length - 2, Math.floor(t))
+  const a = path[i] as Pt
+  const b = path[i + 1] as Pt
   const r = t - i
   return [a[0] + (b[0] - a[0]) * r, a[1] + (b[1] - a[1]) * r]
 }
 
-function inStageMap(j: JourneyState, r: DevReport): string {
+export function inStageMap(j: JourneyState, r: DevReport): string {
   if (!j.next) {
     return `<div class="instage"><div class="ih"><span class="it">🏁 最終ステージ <b>${esc(
       j.current.name,
     )}</b> に到達！</span></div></div>`
   }
+  const theme = MAP_THEMES[j.current.terrain] ?? MAP_THEMES.mountain
+  const path = theme.path
   const prog = j.progressInStage
   const qb = r.questBoard
   const done = qb?.done ?? []
@@ -193,7 +346,7 @@ function inStageMap(j: JourneyState, r: DevReport): string {
 
   const cpSvg = cps
     .map((cp) => {
-      const [x, y] = pointAt(cp.f)
+      const [x, y] = pointAt(path, cp.f)
       const short = cp.label.length > 8 ? `${cp.label.slice(0, 8)}…` : cp.label
       if (cp.state === 'done') {
         return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="8" fill="#57B894"/>
@@ -205,8 +358,11 @@ function inStageMap(j: JourneyState, r: DevReport): string {
     })
     .join('')
 
-  const [yx, yy] = pointAt(prog)
-  const [sx, sy] = CLIMB[CLIMB.length - 1] as readonly [number, number]
+  // 道の折れ線（アンカーを M/L でつなぐ）
+  const route = path.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0]},${p[1]}`).join(' ')
+
+  const [yx, yy] = pointAt(path, prog)
+  const [sx, sy] = path[path.length - 1] as Pt
   const pctTxt = (prog * 100).toFixed(0)
 
   return `
@@ -217,19 +373,15 @@ function inStageMap(j: JourneyState, r: DevReport): string {
       </div>
       <div class="imapwrap">
         <svg class="imap" viewBox="0 0 620 230" role="img" aria-label="${esc(j.current.name)} ステージ内マップ">
-          <defs><linearGradient id="mtn" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stop-color="#3a4256"/><stop offset="1" stop-color="#222838"/></linearGradient></defs>
-          <polygon points="0,230 150,150 320,108 470,62 545,38 620,230" fill="url(#mtn)"/>
-          <polygon points="545,38 522,70 575,70" fill="#e8edf5" opacity="0.85"/>
-          <path d="M40,205 L140,176 L240,150 L320,128 L400,100 L470,72 L545,42" fill="none" stroke="#E8794A" stroke-width="2.4" stroke-dasharray="6 6"/>
+          ${theme.bg}
+          <path d="${route}" fill="none" stroke="#E8794A" stroke-width="2.4" stroke-dasharray="6 6"/>
           ${cpSvg}
           <circle class="youring" cx="${yx.toFixed(1)}" cy="${yy.toFixed(1)}" r="9" fill="#E8794A"/>
           <circle cx="${yx.toFixed(1)}" cy="${yy.toFixed(1)}" r="9" fill="#E8794A" stroke="#15171e" stroke-width="2"/>
           <text x="${yx.toFixed(1)}" y="${(yy - 16).toFixed(1)}" text-anchor="middle" font-size="10.5" fill="#E8794A" font-weight="700">YOU</text>
-          <circle cx="${sx}" cy="${sy}" r="9" fill="#E6B450"/>
-          <rect x="${sx - 2}" y="${sy - 22}" width="3" height="13" fill="#E6B450"/>
-          <polygon points="${sx + 1},${sy - 21} ${sx + 1},${sy - 12} ${sx + 13},${sy - 16.5}" fill="#E6B450"/>
-          <text x="${sx}" y="${sy + 22}" text-anchor="middle" font-size="9.5" fill="#E6B450" font-weight="700">→ ${esc(j.next.name)}</text>
+          <circle cx="${sx}" cy="${sy}" r="13" fill="#1b1e29" stroke="#E6B450" stroke-width="2"/>
+          <text x="${sx}" y="${(sy + 6).toFixed(1)}" text-anchor="middle" font-size="15">${j.next.icon}</text>
+          <text x="${sx}" y="${(sy + 27).toFixed(1)}" text-anchor="middle" font-size="9.5" fill="#E6B450" font-weight="700">→ ${esc(j.next.name)}</text>
         </svg>
       </div>
     </div>`

@@ -10,11 +10,19 @@
  * バーが連続的に伸びる。
  */
 
+/**
+ * ステージの地形。ステージ内マップの背景シーンと道の形を決める意味づけ。
+ * 描画層はこれを見て村/森/港…のマップテーマを選ぶ。
+ */
+export type Terrain = 'village' | 'forest' | 'harbor' | 'pass' | 'mountain' | 'castle' | 'peak'
+
 export interface StageDef {
   name: string
   icon: string
   /** このステージに到達するのに必要なレベル */
   requiredLevel: number
+  /** 地形（ステージ内マップの見た目を決める） */
+  terrain: Terrain
 }
 
 export interface StageState extends StageDef {
@@ -45,13 +53,13 @@ export interface JourneyState {
 
 // 既定の冒険ルート（村→森→港→峠→山岳都市→王都→竜の頂）。
 export const DEFAULT_STAGES: StageDef[] = [
-  { name: 'はじまりの村', icon: '🏕️', requiredLevel: 1 },
-  { name: '試練の森', icon: '🌲', requiredLevel: 5 },
-  { name: '港町ハーバー', icon: '⚓', requiredLevel: 10 },
-  { name: '霧の峠', icon: '🌫️', requiredLevel: 18 },
-  { name: '山岳都市メサ', icon: '🏔️', requiredLevel: 28 },
-  { name: '天空の王都', icon: '🏰', requiredLevel: 40 },
-  { name: '竜の頂', icon: '🐉', requiredLevel: 55 },
+  { name: 'はじまりの村', icon: '🏕️', requiredLevel: 1, terrain: 'village' },
+  { name: '試練の森', icon: '🌲', requiredLevel: 5, terrain: 'forest' },
+  { name: '港町ハーバー', icon: '⚓', requiredLevel: 10, terrain: 'harbor' },
+  { name: '霧の峠', icon: '🌫️', requiredLevel: 18, terrain: 'pass' },
+  { name: '山岳都市メサ', icon: '🏔️', requiredLevel: 28, terrain: 'mountain' },
+  { name: '天空の王都', icon: '🏰', requiredLevel: 40, terrain: 'castle' },
+  { name: '竜の頂', icon: '🐉', requiredLevel: 55, terrain: 'peak' },
 ]
 
 const clamp01 = (n: number): number => Math.max(0, Math.min(1, n))
