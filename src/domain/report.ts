@@ -9,6 +9,7 @@ import { type CityState, buildCity } from './city'
 import type { ExpRules, GamifyConfig } from './config-types'
 import { type JourneyState, buildJourney } from './journey'
 import { type LevelInfo, levelFromExp } from './level'
+import { type Momentum, buildMomentum } from './momentum'
 import type { QuestBoard } from './quests'
 import { countWithin, dailyCounts } from './stats'
 import { currentStreak, longestStreak, uniqueDayKeys } from './streak'
@@ -47,6 +48,8 @@ export interface DevReport {
   journey: JourneyState
   /** RPG 演出: 街（バッジ解放の建物） */
   city: CityState
+  /** RPG 演出: 勢い（全期間の活動EXP推移） */
+  momentum: Momentum
 }
 
 export function computeTotalExp(
@@ -108,9 +111,19 @@ export function buildReport(config: GamifyConfig, raw: RawData): DevReport {
     mergedPRs,
     releases: raw.releases,
     longestStreak: longest,
+    clearedQuests: raw.questBoard?.done.length ?? 0,
   })
   const journey = buildJourney(level.level, level.progress)
   const city = buildCity(badges)
+  const momentum = buildMomentum(
+    {
+      commitDates: raw.commitDates,
+      prDates: raw.mergedPRDates,
+      perCommit: config.exp.perCommit,
+      perMergedPR: config.exp.perMergedPR,
+    },
+    raw.today,
+  )
 
   return {
     generatedAt: raw.today,
@@ -132,5 +145,6 @@ export function buildReport(config: GamifyConfig, raw: RawData): DevReport {
     character,
     journey,
     city,
+    momentum,
   }
 }

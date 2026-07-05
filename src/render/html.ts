@@ -1,8 +1,13 @@
 /**
  * レポートを単体で開ける HTML ダッシュボード（cockpit）に整形する。
- * Lv/EXP・週次・クエスト・バッジに加え、キャラ/装備・冒険マップ・街の演出を描画する。
+ * レベル/キャラ・ステータス・装備・勢い(全期間EXP)・冒険マップ(登山)・街(スカイライン)・
+ * 週次アクティビティ・クエスト・バッジを描画する。すべて実データ駆動。
  */
 
+import type { Character } from '../domain/character'
+import type { CityState } from '../domain/city'
+import type { JourneyState } from '../domain/journey'
+import type { Momentum } from '../domain/momentum'
 import type { DevReport } from '../domain/report'
 
 const esc = (s: string): string =>
@@ -11,6 +16,8 @@ const esc = (s: string): string =>
     (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch] ?? ch,
   )
 
+const nf = (n: number): string => n.toLocaleString('en-US')
+
 function sparkBars(values: number[]): string {
   const max = Math.max(1, ...values)
   return values
@@ -18,18 +25,305 @@ function sparkBars(values: number[]): string {
     .join('')
 }
 
-function badgeCells(badges: DevReport['badges']): string {
-  return badges
-    .map((b) => {
-      const cls = b.unlocked ? 'badge' : 'badge locked'
-      const sub = b.unlocked ? (b.def.unlocks ? `→ ${esc(b.def.unlocks)}` : '解放') : '未解放'
-      return `<div class="${cls}"><div class="ico">${b.def.icon}</div><div class="bn">${esc(
-        b.def.name,
-      )}</div><div class="bw">${esc(sub)}</div></div>`
+/* ===== キャラクター ===== */
+function statBars(stats: Character['stats']): string {
+  return stats
+    .map(
+      (s) =>
+        `<div class="st ${s.key}"><span class="sl">${esc(s.label)}</span><span class="strack"><i style="width:${s.pct}%"></i></span><span class="sv">${s.value}</span></div>`,
+    )
+    .join('')
+}
+
+function characterCard(ch: Character): string {
+  const titleShort = ch.title.replace(/の$/, '')
+  const next = ch.nextTitle
+    ? `次の称号まで Lv.${ch.nextTitle.atLevel}（→ ${esc(ch.nextTitle.title.replace(/の$/, ''))}）`
+    : '最高位に到達'
+  return `
+    <div class="card charcard">
+      <div class="avatar">${ch.avatar}</div>
+      <div class="charinfo">
+        <div class="cls">あなた <span class="jobtag">ジョブ: ${esc(ch.job)}</span></div>
+        <div class="ctit">称号「${esc(titleShort)}」</div>
+        <div class="job-next">${next}</div>
+        <div class="stats">${statBars(ch.stats)}</div>
+      </div>
+    </div>`
+}
+
+/* ===== 装備 ===== */
+function equipmentSlots(eq: Character['equipment']): string {
+  return eq
+    .map((e) => {
+      const plus = e.plus > 0 ? ` <span class="splus">+${e.plus}</span>` : ''
+      const rar = e.rarity.toLowerCase()
+      return `
+    <div class="slot">
+      <div class="stype">${e.typeIcon} ${esc(e.slotLabel)}</div>
+      <div class="srow"><span class="sico">${e.icon}</span><div><div class="sname">${esc(
+        e.name,
+      )}${plus}</div><span class="rar ${rar}">${e.rarity}</span></div></div>
+      <div class="src">${esc(e.flavor)}</div>
+    </div>`
     })
     .join('')
 }
 
+/* ===== 勢い（Momentum）===== */
+function momentumCard(m: Momentum): string {
+  const W = 800
+  const H = 170
+  const base = 140
+  const top = 18
+  const span = m.endMs - m.startMs || 1
+  const maxE = m.maxExp || 1
+  const xy = m.points.map((p) => {
+    const x = ((p.tMs - m.startMs) / span) * W
+    const y = base - (p.exp / maxE) * (base - top)
+    return [x, y] as const
+  })
+  const line = xy.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
+  const first = xy[0] ?? [0, base]
+  const lastP = xy[xy.length - 1] ?? [W, base]
+  const area = `${first[0].toFixed(1)},${base} ${line} ${lastP[0].toFixed(1)},${base}`
+  const grid = m.months
+    .map((mo) => {
+      const x = (mo.pos * W).toFixed(1)
+      return `<line x1="${x}" y1="${top}" x2="${x}" y2="${base}" stroke="#2E3342" stroke-dasharray="2 7" opacity="0.6"/>`
+    })
+    .join('')
+
+  // x軸ラベル（月が多い場合は間引き）
+  const step = Math.max(1, Math.ceil(m.months.length / 6))
+  const picked = m.months.filter((_, i) => i % step === 0)
+  const axis = `<span>開始</span>${picked.map((mo) => `<span>${esc(mo.label)}</span>`).join('')}<span>今</span>`
+
+  const up = m.weekDelta >= 0
+  const chg = `${up ? '▲' : '▼'} ${up ? '+' : ''}${m.weekDelta} XP (${up ? '+' : ''}${m.weekPct.toFixed(1)}%) 今週`
+
+  return `
+  <div class="card momentum">
+    <div class="pxrow">
+      <span class="px">${nf(m.latestExp)}</span><span class="chg">${chg}</span>
+      <span class="ranges"><span class="on">全期間</span></span>
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+      <defs><linearGradient id="mg" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#E6B450" stop-opacity="0.32"/>
+        <stop offset="1" stop-color="#E6B450" stop-opacity="0"/></linearGradient></defs>
+      <line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="#2E3342"/>
+      <line x1="0" y1="92" x2="${W}" y2="92" stroke="#2E3342" stroke-dasharray="3 6"/>
+      <line x1="0" y1="44" x2="${W}" y2="44" stroke="#2E3342" stroke-dasharray="3 6"/>
+      ${grid}
+      <polygon points="${area}" fill="url(#mg)"/>
+      <polyline points="${line}" fill="none" stroke="#E6B450" stroke-width="2.6"/>
+      <circle cx="${lastP[0].toFixed(1)}" cy="${lastP[1].toFixed(1)}" r="4.5" fill="#E6B450"/>
+    </svg>
+    <div class="xaxis">${axis}</div>
+  </div>`
+}
+
+/* ===== 冒険マップ（オーバーワールド + 登山）===== */
+const STAGE_THEMES = ['s-grass', 's-forest', 's-temple', 's-mtn', 's-castle']
+
+function overworld(j: JourneyState): string {
+  const nodes = j.stages
+    .map((s, i) => {
+      const theme = STAGE_THEMES[i % STAGE_THEMES.length]
+      const status = s.current ? 'you' : s.reached ? 'done' : 'locked'
+      const goal = i === j.stages.length - 1 ? ' castle-goal' : ''
+      const nameSuffix = s.current ? ' ← 今ここ' : ''
+      const stat = s.current
+        ? `到達中<br>Lv.${s.requiredLevel} 〜`
+        : s.reached
+          ? `突破<br>Lv.${s.requiredLevel}`
+          : `未到達<br>Lv.${s.requiredLevel}`
+      return `<div class="stage ${theme} ${status}${goal}"><div class="node">${s.icon}</div><div class="sname">${esc(
+        s.name,
+      )}${nameSuffix}</div><div class="sstat">${stat}</div></div>`
+    })
+    .join('')
+  return `<div class="routewrap"><div class="route">${nodes}</div></div>`
+}
+
+// 登山ルートの折れ線（固定アンカーを線形補間）
+const CLIMB: ReadonlyArray<readonly [number, number]> = [
+  [40, 205],
+  [140, 176],
+  [240, 150],
+  [320, 128],
+  [400, 100],
+  [470, 72],
+  [545, 42],
+]
+function pointAt(f: number): [number, number] {
+  const t = Math.max(0, Math.min(1, f)) * (CLIMB.length - 1)
+  const i = Math.min(CLIMB.length - 2, Math.floor(t))
+  const a = CLIMB[i] as readonly [number, number]
+  const b = CLIMB[i + 1] as readonly [number, number]
+  const r = t - i
+  return [a[0] + (b[0] - a[0]) * r, a[1] + (b[1] - a[1]) * r]
+}
+
+function inStageMap(j: JourneyState, r: DevReport): string {
+  if (!j.next) {
+    return `<div class="instage"><div class="ih"><span class="it">🏁 最終ステージ <b>${esc(
+      j.current.name,
+    )}</b> に到達！</span></div></div>`
+  }
+  const prog = j.progressInStage
+  const qb = r.questBoard
+  const done = qb?.done ?? []
+  const upcoming = [...(qb?.doing ?? []), ...(qb?.todo ?? [])]
+
+  // チェックポイント: 完了はYOUの手前、未着手はYOUの先に配置
+  type CP = { f: number; state: 'done' | 'todo'; num?: number; label: string }
+  const cps: CP[] = []
+  const behind = done.slice(-2)
+  behind.forEach((q, i) => {
+    const f = prog * ((i + 1) / (behind.length + 1))
+    cps.push({ f, state: 'done', num: q.number, label: q.title })
+  })
+  const ahead = upcoming.slice(0, 2)
+  ahead.forEach((q, i) => {
+    const f = prog + (1 - prog) * ((i + 1) / (ahead.length + 1))
+    cps.push({ f, state: 'todo', num: q.number, label: q.title })
+  })
+
+  const cpSvg = cps
+    .map((cp) => {
+      const [x, y] = pointAt(cp.f)
+      const short = cp.label.length > 8 ? `${cp.label.slice(0, 8)}…` : cp.label
+      if (cp.state === 'done') {
+        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="8" fill="#57B894"/>
+        <text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="middle" font-size="10" fill="#15171e" font-weight="700">✓</text>
+        <text x="${x.toFixed(1)}" y="${(y + 22).toFixed(1)}" text-anchor="middle" font-size="9.5" fill="#8B8E9B">#${cp.num} ${esc(short)}</text>`
+      }
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="8" fill="#1b1e29" stroke="#5A5E6C" stroke-width="2"/>
+        <text x="${x.toFixed(1)}" y="${(y - 14).toFixed(1)}" text-anchor="middle" font-size="9.5" fill="#8B8E9B">#${cp.num} ${esc(short)}</text>`
+    })
+    .join('')
+
+  const [yx, yy] = pointAt(prog)
+  const [sx, sy] = CLIMB[CLIMB.length - 1] as readonly [number, number]
+  const pctTxt = (prog * 100).toFixed(0)
+
+  return `
+    <div class="instage">
+      <div class="ih">
+        <span class="it">現在のステージ ${j.current.icon} <b>${esc(j.current.name)}</b></span>
+        <span class="ip">この区間 <b>${pctTxt}%</b> — 次は ${j.next.icon} ${esc(j.next.name)}</span>
+      </div>
+      <div class="imapwrap">
+        <svg class="imap" viewBox="0 0 620 230" role="img" aria-label="${esc(j.current.name)} ステージ内マップ">
+          <defs><linearGradient id="mtn" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#3a4256"/><stop offset="1" stop-color="#222838"/></linearGradient></defs>
+          <polygon points="0,230 150,150 320,108 470,62 545,38 620,230" fill="url(#mtn)"/>
+          <polygon points="545,38 522,70 575,70" fill="#e8edf5" opacity="0.85"/>
+          <path d="M40,205 L140,176 L240,150 L320,128 L400,100 L470,72 L545,42" fill="none" stroke="#E8794A" stroke-width="2.4" stroke-dasharray="6 6"/>
+          ${cpSvg}
+          <circle class="youring" cx="${yx.toFixed(1)}" cy="${yy.toFixed(1)}" r="9" fill="#E8794A"/>
+          <circle cx="${yx.toFixed(1)}" cy="${yy.toFixed(1)}" r="9" fill="#E8794A" stroke="#15171e" stroke-width="2"/>
+          <text x="${yx.toFixed(1)}" y="${(yy - 16).toFixed(1)}" text-anchor="middle" font-size="10.5" fill="#E8794A" font-weight="700">YOU</text>
+          <circle cx="${sx}" cy="${sy}" r="9" fill="#E6B450"/>
+          <rect x="${sx - 2}" y="${sy - 22}" width="3" height="13" fill="#E6B450"/>
+          <polygon points="${sx + 1},${sy - 21} ${sx + 1},${sy - 12} ${sx + 13},${sy - 16.5}" fill="#E6B450"/>
+          <text x="${sx}" y="${sy + 22}" text-anchor="middle" font-size="9.5" fill="#E6B450" font-weight="700">→ ${esc(j.next.name)}</text>
+        </svg>
+      </div>
+    </div>`
+}
+
+/* ===== 街（スカイライン）===== */
+function citySkyline(city: CityState): string {
+  const builtSet = new Set(city.buildings.filter((b) => b.built).map((b) => b.name))
+  const has = (kw: string): boolean => [...builtSet].some((n) => n.includes(kw))
+  const WIN = 'url(#win)'
+
+  const chapel = has('チャペル')
+    ? `<polygon points="150,130 168,104 186,130" fill="#c9c2d8"/>
+       <rect x="166" y="88" width="4" height="16" fill="#c9c2d8"/><rect x="162" y="93" width="12" height="4" fill="#c9c2d8"/>
+       <rect x="150" y="130" width="36" height="62" fill="#3c3a52"/>
+       <path d="M162,192 L162,168 Q168,158 174,168 L174,192 Z" fill="#E6B450" opacity="0.5"/>`
+    : `<rect x="150" y="150" width="36" height="42" fill="none" stroke="#5A5E6C" stroke-dasharray="4 4"/><text x="168" y="176" text-anchor="middle" font-size="16">🚧</text>`
+
+  const clock = has('時計塔')
+    ? `<rect x="266" y="58" width="40" height="134" fill="#41506a"/><rect x="266" y="58" width="40" height="134" fill="${WIN}"/>
+       <circle cx="286" cy="80" r="11" fill="#15171e"/><circle cx="286" cy="80" r="11" fill="none" stroke="#E6B450" stroke-width="1.5"/>
+       <line x1="286" y1="80" x2="286" y2="73" stroke="#E6B450" stroke-width="1.5"/><line x1="286" y1="80" x2="291" y2="82" stroke="#E6B450" stroke-width="1.5"/>`
+    : `<rect x="266" y="120" width="40" height="72" fill="none" stroke="#5A5E6C" stroke-dasharray="4 4"/><text x="286" y="164" text-anchor="middle" font-size="16">🚧</text>`
+
+  const tower = has('高層ビル')
+    ? `<rect x="200" y="70" width="54" height="122" fill="#2f3850"/><rect x="200" y="70" width="54" height="122" fill="${WIN}"/>`
+    : `<rect x="200" y="130" width="54" height="62" fill="none" stroke="#5A5E6C" stroke-dasharray="4 4"/><text x="227" y="166" text-anchor="middle" font-size="16">🚧</text>`
+
+  const hall = has('役場')
+    ? `<rect x="318" y="98" width="50" height="94" fill="#2b3242"/><rect x="318" y="98" width="50" height="94" fill="${WIN}"/>
+       <polygon points="318,98 343,84 368,98" fill="#5a4a2a"/>`
+    : `<rect x="318" y="140" width="50" height="52" fill="none" stroke="#5A5E6C" stroke-dasharray="4 4"/><text x="343" y="170" text-anchor="middle" font-size="16">🚧</text>`
+
+  // リリース記念の塔（初リリース＝チャペルと同時に立つ）
+  const landmark = has('チャペル')
+    ? `<rect x="382" y="34" width="46" height="158" fill="#3a4256"/><rect x="382" y="34" width="46" height="158" fill="${WIN}"/>
+       <polygon points="382,34 405,16 428,34" fill="#5a4a2a"/>
+       <rect x="403" y="6" width="4" height="12" fill="#E8794A"/><polygon points="407,7 407,14 418,10.5" fill="#E8794A"/>`
+    : ''
+
+  const district = has('区画拡張')
+    ? `<rect x="440" y="112" width="48" height="80" fill="#2f3850"/><rect x="440" y="112" width="48" height="80" fill="${WIN}"/>`
+    : `<rect x="440" y="150" width="48" height="42" fill="none" stroke="#5A5E6C" stroke-dasharray="4 4"/><text x="464" y="176" text-anchor="middle" font-size="15">🚧</text>`
+
+  const hospital = has('病院')
+    ? `<rect x="500" y="120" width="44" height="72" fill="#33405a"/><rect x="500" y="120" width="44" height="72" fill="${WIN}"/>
+       <rect x="518" y="128" width="8" height="3" fill="#E8794A"/><rect x="520.5" y="125.5" width="3" height="8" fill="#E8794A"/>`
+    : `<polygon points="500,150 522,133 544,150" fill="#b5613f"/><rect x="504" y="150" width="40" height="42" fill="#3a4256"/><rect x="504" y="150" width="40" height="42" fill="${WIN}"/>`
+
+  return `
+    <svg viewBox="0 0 600 210" role="img" aria-label="街並み">
+      <defs>
+        <pattern id="win" width="11" height="13" patternUnits="userSpaceOnUse">
+          <rect width="11" height="13" fill="none"/>
+          <rect x="3" y="4" width="4" height="5" rx="0.5" fill="#E6B450" opacity="0.85"/>
+        </pattern>
+        <linearGradient id="ny" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#1b2030"/><stop offset="1" stop-color="#171a24"/>
+        </linearGradient>
+      </defs>
+      <rect x="0" y="0" width="600" height="210" fill="url(#ny)"/>
+      <circle cx="535" cy="42" r="20" fill="#E6B450" opacity="0.25"/><circle cx="535" cy="42" r="13" fill="#E6B450" opacity="0.4"/>
+      <rect x="8" y="186" width="56" height="6" rx="3" fill="#2c7a4a" opacity="0.5"/>
+      <g fill="#3a7a55"><circle cx="22" cy="178" r="11"/><circle cx="40" cy="180" r="9"/></g>
+      <rect x="20" y="183" width="3" height="8" fill="#5a4530"/><rect x="38" y="184" width="3" height="7" fill="#5a4530"/>
+      <polygon points="78,150 102,132 126,150" fill="#b5613f"/><rect x="82" y="150" width="40" height="42" fill="#3a4256"/><rect x="82" y="150" width="40" height="42" fill="${WIN}"/>
+      ${chapel}
+      ${tower}
+      ${clock}
+      ${hall}
+      ${landmark}
+      ${district}
+      ${hospital}
+      <g fill="#3a7a55"><circle cx="566" cy="176" r="12"/></g><rect x="564" y="182" width="3" height="10" fill="#5a4530"/>
+      <rect x="0" y="192" width="600" height="18" fill="#242837"/>
+    </svg>`
+}
+
+function unlockList(city: CityState): string {
+  return city.buildings
+    .filter((b) => b.from !== '拠点')
+    .map((b) => {
+      const cls = b.built ? '' : ' locked'
+      const stat = b.built
+        ? '<span class="ustat ok">解放</span>'
+        : '<span class="ustat lock">未解放</span>'
+      return `<div class="ub${cls}"><span class="uico">${b.built ? b.icon : '🚧'}</span><div class="un">${esc(
+        b.name,
+      )}<small>実績「${esc(b.from)}」</small></div>${stat}</div>`
+    })
+    .join('')
+}
+
+/* ===== クエスト ===== */
 function questColumn(
   title: string,
   cls: string,
@@ -39,9 +333,9 @@ function questColumn(
     quests
       .map(
         (q) =>
-          `<div class="qcard"><div class="qh"><span class="chip ${q.type}">${
+          `<div class="qcard"><div class="qhead"><span class="chip ${q.type}">${
             q.type === 'main' ? 'Main' : 'Sub'
-          }</span><span class="qx">+${q.exp}</span></div><div class="qt"><span class="qn">#${
+          }</span><span class="qx">+${q.exp}</span></div><div class="qt"><span class="qnum">#${
             q.number
           }</span> ${esc(q.title)}</div></div>`,
       )
@@ -61,57 +355,14 @@ function questBoardSection(r: DevReport): string {
   </div>`
 }
 
-function equipmentRow(eq: DevReport['character']['equipment']): string {
-  return eq
-    .map(
-      (e) =>
-        `<div class="eq"><span class="eqi">${e.icon}</span><div class="eqm"><div class="eqs">${esc(
-          e.slotLabel,
-        )}</div><div class="eqn">${esc(e.name)} <span class="eqt">+${e.tier}</span></div></div></div>`,
-    )
-    .join('')
-}
-
-function stageTrack(j: DevReport['journey']): string {
-  return j.stages
-    .map((s) => {
-      const cls = s.current ? 'st current' : s.reached ? 'st reached' : 'st'
-      return `<div class="${cls}"><span class="sti">${s.icon}</span><span class="stn">${esc(
-        s.name,
-      )}</span><span class="stl">Lv.${s.requiredLevel}</span></div>`
-    })
-    .join('<span class="stsep"></span>')
-}
-
-function climbMap(j: DevReport['journey']): string {
-  if (!j.next)
-    return '<div class="climb-done">🏁 最終ステージ「' + esc(j.current.name) + '」到達！</div>'
-  const pct = (j.progressInStage * 100).toFixed(1)
-  const dots = j.waypoints
-    .map((w) => {
-      const cls = w.here ? 'wp here' : w.reached ? 'wp reached' : 'wp'
-      return `<i class="${cls}" style="left:${(w.pos * 100).toFixed(2)}%" title="Lv.${w.level}"></i>`
-    })
-    .join('')
-  return `
-  <div class="climb">
-    <div class="climb-ends"><span>${j.current.icon} ${esc(j.current.name)}</span><span class="nx">${
-      j.next.icon
-    } ${esc(j.next.name)}</span></div>
-    <div class="track"><span class="fill" style="width:${pct}%"></span>${dots}<span class="hiker" style="left:${pct}%">🧗</span></div>
-    <div class="climb-foot"><span>Lv.${j.current.requiredLevel}</span><span class="mid">この区間 ${pct}%</span><span>Lv.${j.next.requiredLevel}</span></div>
-  </div>`
-}
-
-function cityGrid(city: DevReport['city']): string {
-  return city.buildings
+function badgeCells(badges: DevReport['badges']): string {
+  return badges
     .map((b) => {
-      const cls = b.built ? 'bd' : 'bd locked'
-      const ic = b.built ? b.icon : '🚧'
-      const sub = b.built ? esc(b.from) : `${esc(b.from)}で解放`
-      return `<div class="${cls}"><div class="bdi">${ic}</div><div class="bdn">${esc(
-        b.name,
-      )}</div><div class="bdf">${sub}</div></div>`
+      const cls = b.unlocked ? 'badge' : 'badge locked'
+      const sub = b.unlocked ? (b.def.unlocks ? `→ ${esc(b.def.unlocks)}` : '解放') : '未解放'
+      return `<div class="${cls}"><div class="ico">${b.def.icon}</div><div class="bn">${esc(
+        b.def.name,
+      )}</div><div class="bw">${esc(sub)}</div></div>`
     })
     .join('')
 }
@@ -132,139 +383,179 @@ export function renderHtml(projectName: string, r: DevReport): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(projectName)} / DEV COCKPIT</title>
 <style>
-  :root{--ink:#15171E;--panel:#1D202A;--raised:#242837;--border:#2E3342;--text:#ECEAE3;--muted:#8B8E9B;--faint:#5A5E6C;--gold:#E6B450;--gold-dim:#8A6E32;--coral:#E8794A;--teal:#57B894;--mono:ui-monospace,"SF Mono",Menlo,monospace;--sans:ui-sans-serif,system-ui,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif}
+  :root{--ink:#15171E;--panel:#1D202A;--raised:#242837;--border:#2E3342;--text:#ECEAE3;--muted:#8B8E9B;--faint:#5A5E6C;--gold:#E6B450;--gold-dim:#8A6E32;--coral:#E8794A;--teal:#57B894;--sky:#5FA8D8;--purple:#B06BFF;--mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;--sans:ui-sans-serif,system-ui,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif}
   *{box-sizing:border-box}
-  body{margin:0;color:var(--text);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased;background:radial-gradient(1100px 520px at 85% -10%,rgba(230,180,80,.06),transparent 60%),var(--ink)}
-  .wrap{max-width:1000px;margin:0 auto;padding:38px 24px 64px}
-  .topbar{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--border);padding-bottom:14px;margin-bottom:24px}
+  body{margin:0;color:var(--text);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased;background:radial-gradient(1100px 520px at 85% -10%,rgba(230,180,80,.06),transparent 60%),radial-gradient(800px 460px at -8% 108%,rgba(95,168,216,.05),transparent 55%),var(--ink)}
+  .wrap{max-width:1080px;margin:0 auto;padding:38px 24px 72px}
+  .topbar{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--border);padding-bottom:14px;margin-bottom:22px}
+  .topbar .b{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
   .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--gold)}
-  .topbar h1{font-family:var(--mono);font-size:18px;font-weight:600;margin:6px 0 0}
-  .topbar .date{font-family:var(--mono);font-size:12px;color:var(--muted)}
-  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px}
-  .hero{display:grid;grid-template-columns:auto 1fr;gap:26px;align-items:center;padding:28px 30px;margin-bottom:16px}
-  .lvl{display:flex;flex-direction:column;align-items:center;justify-content:center;width:120px;height:120px;border-radius:50%;background:radial-gradient(circle at 50% 35%,#2c3043,#1a1d27);border:2px solid var(--gold);box-shadow:0 0 0 7px rgba(230,180,80,.08)}
-  .lvl .t{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--gold)}
-  .lvl .n{font-family:var(--mono);font-size:52px;font-weight:700;line-height:1}
-  .rank{font-size:22px;font-weight:700;margin:0 0 3px}
-  .since{font-family:var(--mono);font-size:12px;color:var(--faint);margin-bottom:16px}
-  .exprow{display:flex;justify-content:space-between;font-family:var(--mono);font-size:13px;color:var(--muted);margin-bottom:7px}
-  .exprow .now{color:var(--gold)}.exprow b{color:var(--text)}
-  .bar{height:13px;border-radius:7px;background:#11131a;border:1px solid var(--border);overflow:hidden}
-  .bar>span{display:block;height:100%;background:linear-gradient(90deg,var(--gold-dim),var(--gold));box-shadow:0 0 10px rgba(230,180,80,.4)}
-  .breakdown{display:flex;gap:20px;margin-top:16px}
-  .breakdown .bn{font-family:var(--mono);font-size:16px;font-weight:700}
-  .breakdown .bl{font-family:var(--mono);font-size:11px;color:var(--faint)}
-  .sh{display:flex;align-items:baseline;gap:12px;margin:28px 2px 14px}
+  .topbar h1{font-family:var(--mono);font-size:19px;font-weight:600;margin:0}
+  .topbar .date{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .sh{display:flex;align-items:baseline;gap:12px;margin:30px 2px 14px}
   .sh h2{font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;margin:0}
   .sh .line{flex:1;height:1px;background:var(--border)}
   .sh .hint{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px}
+  .hero{display:grid;grid-template-columns:1.45fr 1fr;gap:16px}
+  .lvlcard{display:grid;grid-template-columns:auto 1fr;gap:26px;align-items:center;padding:28px 30px}
+  .lvl{display:flex;flex-direction:column;align-items:center;justify-content:center;width:124px;height:124px;border-radius:50%;flex-shrink:0;background:radial-gradient(circle at 50% 35%,#2c3043,#1a1d27);border:2px solid var(--gold);box-shadow:0 0 0 7px rgba(230,180,80,.08),inset 0 2px 14px rgba(0,0,0,.4)}
+  .lvl .t{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--gold)}
+  .lvl .n{font-family:var(--mono);font-size:54px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+  .hmeta{min-width:0}
+  .hmeta .rank{font-size:22px;font-weight:700;margin:0 0 3px}
+  .hmeta .rank small{font-family:var(--mono);font-size:13px;font-weight:500;color:var(--muted)}
+  .hmeta .since{font-family:var(--mono);font-size:12px;color:var(--faint);margin-bottom:16px}
+  .exprow{display:flex;justify-content:space-between;font-family:var(--mono);font-size:13px;color:var(--muted);margin-bottom:7px}
+  .exprow .now{color:var(--gold)}.exprow b{color:var(--text);font-variant-numeric:tabular-nums}
+  .bar{height:13px;border-radius:7px;background:#11131a;border:1px solid var(--border);overflow:hidden}
+  .bar>span{display:block;height:100%;background:linear-gradient(90deg,var(--gold-dim),var(--gold));border-radius:7px;box-shadow:0 0 10px rgba(230,180,80,.4)}
+  .breakdown{display:flex;gap:18px;margin-top:16px}
+  .breakdown .bn{font-family:var(--mono);font-size:16px;font-weight:700}
+  .breakdown .bl{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .charcard{padding:22px 24px;display:grid;grid-template-columns:auto 1fr;gap:18px;align-items:center}
+  .avatar{width:92px;height:92px;border-radius:16px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:50px;background:radial-gradient(circle at 50% 30%,#2f3447,#1b1e29);border:1px solid var(--border);box-shadow:inset 0 2px 12px rgba(0,0,0,.4)}
+  .charinfo .cls{font-size:16px;font-weight:700;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .charinfo .jobtag{font-family:var(--mono);font-size:10.5px;font-weight:600;color:var(--purple);background:rgba(176,107,255,.12);border:1px solid rgba(176,107,255,.35);border-radius:5px;padding:2px 7px}
+  .charinfo .ctit{font-family:var(--mono);font-size:11.5px;color:var(--gold);margin-top:3px}
+  .charinfo .job-next{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:3px}
+  .stats{display:flex;flex-direction:column;gap:7px;margin-top:12px}
+  .st{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .st .sl{width:70px}.st .strack{flex:1;height:6px;border-radius:4px;background:#11131a;overflow:hidden}
+  .st .strack i{display:block;height:100%}
+  .st .sv{width:40px;text-align:right;color:var(--text)}
+  .st.atk i{background:var(--coral)}.st.def i{background:var(--sky)}.st.spd i{background:var(--teal)}.st.mag i{background:var(--purple)}
+  .equip{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .slot{background:var(--panel);border:1px solid var(--border);border-radius:13px;padding:15px 16px;position:relative;overflow:hidden}
+  .slot .stype{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--faint);text-transform:uppercase}
+  .slot .srow{display:flex;align-items:center;gap:11px;margin-top:9px}
+  .slot .sico{font-size:30px;line-height:1}
+  .slot .sname{font-size:14px;font-weight:700}
+  .slot .splus{color:var(--teal);font-family:var(--mono)}
+  .slot .rar{font-family:var(--mono);font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;color:#15171e;display:inline-block;margin-top:3px}
+  .slot .rar.ssr{background:linear-gradient(135deg,#ff7aa8,#ffcd4d,#5fd0d8)}
+  .slot .rar.sr{background:var(--purple);color:#fff}.slot .rar.r{background:var(--sky)}
+  .slot .src{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:10px}
+  .momentum{padding:18px 22px 14px}
+  .momentum .pxrow{display:flex;align-items:baseline;gap:12px;margin-bottom:8px}
+  .momentum .px{font-family:var(--mono);font-size:30px;font-weight:700;font-variant-numeric:tabular-nums}
+  .momentum .chg{font-family:var(--mono);font-size:13px;color:var(--teal)}
+  .momentum .ranges{margin-left:auto;display:flex;gap:6px}
+  .momentum .ranges span{font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:6px;color:var(--gold);border:1px solid var(--gold-dim);background:rgba(230,180,80,.1)}
+  .momentum svg{display:block;width:100%;height:170px}
+  .momentum .xaxis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:6px}
   .pulse{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
   .pulse .s{background:var(--panel);border:1px solid var(--border);border-radius:13px;padding:16px 17px}
   .pulse .s .k{font-family:var(--mono);font-size:11px;color:var(--muted)}
-  .pulse .s .v{font-family:var(--mono);font-size:32px;font-weight:700;margin-top:8px;line-height:1}
+  .pulse .s .v{font-family:var(--mono);font-size:30px;font-weight:700;margin-top:8px;line-height:1}
   .pulse .s .v span{font-size:13px;color:var(--muted);font-weight:500}
   .pulse .s.fire .v{color:var(--coral)}.pulse .s.xp .v{color:var(--gold)}
-  .spark{display:flex;align-items:flex-end;gap:3px;height:30px;margin-top:12px}
+  .spark{display:flex;align-items:flex-end;gap:3px;height:28px;margin-top:12px}
   .spark i{flex:1;border-radius:2px;min-height:3px;background:rgba(230,180,80,.5)}
+  .journey{padding:20px 20px 22px}
+  .routewrap{overflow-x:auto;margin:0 -20px;padding:0 20px 4px}
+  .route{display:flex;align-items:flex-start;min-width:640px}
+  .stage{flex:1;display:flex;flex-direction:column;align-items:center;text-align:center;position:relative;padding:0 4px}
+  .stage::before{content:"";position:absolute;top:31px;left:-50%;width:100%;height:3px;background:repeating-linear-gradient(90deg,var(--faint) 0 7px,transparent 7px 13px);z-index:0}
+  .stage:first-child::before{display:none}
+  .stage.done::before{background:var(--teal)}
+  .node{width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:30px;position:relative;z-index:1;border:2px solid var(--border)}
+  .stage.s-grass .node{background:radial-gradient(circle,#3a5a3a,#22321f)}
+  .stage.s-forest .node{background:radial-gradient(circle,#2f4a3a,#1d2f26)}
+  .stage.s-temple .node{background:radial-gradient(circle,#4a4368,#28243a)}
+  .stage.s-mtn .node{background:radial-gradient(circle,#4a4a55,#2a2a33)}
+  .stage.s-castle .node{background:radial-gradient(circle,#5a4a2a,#332a17)}
+  .stage.done .node{border-color:var(--teal)}
+  .stage.you .node{border-color:var(--coral);box-shadow:0 0 0 4px rgba(232,121,74,.25)}
+  .stage.locked .node{opacity:.5;border-style:dashed}
+  .stage .sname{font-size:12.5px;font-weight:700;margin-top:10px}
+  .stage .sstat{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:3px;line-height:1.4}
+  .stage.you .sname{color:var(--coral)}.stage.done .sname{color:var(--teal)}.stage.castle-goal .sname{color:var(--gold)}
+  .instage{margin-top:18px;border-top:1px solid var(--border);padding-top:14px}
+  .instage .ih{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:0 2px 10px}
+  .instage .ih .it{font-size:14px;font-weight:700}.instage .ih .it b{color:var(--coral)}
+  .instage .ih .ip{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:auto}
+  .instage .ip b{color:var(--gold)}
+  .imapwrap{overflow-x:auto;margin:0 -20px;padding:0 20px}
+  .imap{display:block;width:100%;min-width:560px;height:auto}
+  .imap text{font-family:var(--mono)}
+  .cityrow{display:grid;grid-template-columns:1.6fr 1fr;gap:16px}
+  .citycard{padding:16px 18px 14px;display:flex;flex-direction:column}
+  .citycard svg{display:block;width:100%;height:auto;border-radius:8px}
+  .citycard .legend{display:flex;gap:18px;font-family:var(--mono);font-size:11px;color:var(--muted);padding-top:12px;flex-wrap:wrap}
+  .citycard .legend b{color:var(--text)}
+  .unlock{padding:16px 18px}
+  .unlock h3{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:0 0 12px}
+  .ub{display:flex;align-items:center;gap:11px;padding:8px 0;border-bottom:1px solid var(--border)}
+  .ub:last-child{border-bottom:none}
+  .ub .uico{font-size:22px;width:26px;text-align:center}
+  .ub .un{font-size:13px;flex:1}.ub .un small{display:block;font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .ub .ustat{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:4px}
+  .ub .ustat.ok{color:var(--teal);background:rgba(87,184,148,.12);border:1px solid rgba(87,184,148,.3)}
+  .ub .ustat.lock{color:var(--faint);background:rgba(90,94,108,.12);border:1px solid var(--border)}
+  .ub.locked{opacity:.55}
+  .board{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .col{background:var(--panel);border:1px solid var(--border);border-radius:13px;padding:14px 14px 16px}
+  .col .colh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px}
+  .col .colh .ct{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase}
+  .col.todo .ct{color:var(--muted)}.col.prog .ct{color:var(--gold)}.col.done .ct{color:var(--teal)}
+  .col .colh .cn{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .qcard{background:var(--raised);border:1px solid var(--border);border-radius:9px;padding:11px 12px;margin-bottom:9px}
+  .qcard:last-child{margin-bottom:0}
+  .qcard .qhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .chip{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.06em;padding:2px 6px;border-radius:4px;text-transform:uppercase}
+  .chip.main{color:var(--gold);background:rgba(230,180,80,.12);border:1px solid var(--gold-dim)}
+  .chip.sub{color:var(--muted);background:rgba(139,142,155,.1);border:1px solid var(--border)}
+  .qcard .qx{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--gold)}
+  .col.done .qx{color:var(--teal)}
+  .qcard .qt{font-size:13.5px;line-height:1.4}
+  .qcard .qnum{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .col.done .qcard{opacity:.82}.col.done .qcard .qt{text-decoration:line-through;text-decoration-color:var(--faint)}
+  .empty{font-family:var(--mono);font-size:11px;color:var(--faint);padding:6px 2px}
   .badges{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
   .badge{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 8px 13px;text-align:center}
   .badge .ico{font-size:26px;line-height:1}
   .badge .bn{font-family:var(--mono);font-size:11px;margin-top:9px}
   .badge .bw{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:3px}
   .badge.locked{opacity:.4}.badge.locked .ico{filter:grayscale(1) brightness(.7)}
-  .note{font-family:var(--mono);font-size:11.5px;color:var(--muted);background:var(--panel);border:1px dashed var(--border);border-radius:12px;padding:14px 16px;margin-top:14px}
+  .note{font-family:var(--mono);font-size:11.5px;color:var(--muted);background:var(--panel);border:1px dashed var(--border);border-radius:12px;padding:14px 16px;margin-top:24px}
   .note b{color:var(--text)}
-  .board{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-  .col{background:var(--panel);border:1px solid var(--border);border-radius:13px;padding:14px}
-  .colh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px}
-  .colh .ct{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase}
-  .col.todo .ct{color:var(--muted)}.col.prog .ct{color:var(--gold)}.col.done .ct{color:var(--teal)}
-  .colh .cn{font-family:var(--mono);font-size:12px;color:var(--faint)}
-  .qcard{background:var(--raised);border:1px solid var(--border);border-radius:9px;padding:10px 12px;margin-bottom:9px}
-  .qcard:last-child{margin-bottom:0}
-  .qh{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-  .chip{font-family:var(--mono);font-size:10px;font-weight:600;padding:2px 6px;border-radius:4px;text-transform:uppercase}
-  .chip.main{color:var(--gold);background:rgba(230,180,80,.12);border:1px solid var(--gold-dim)}
-  .chip.sub{color:var(--muted);background:rgba(139,142,155,.1);border:1px solid var(--border)}
-  .qx{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--gold)}
-  .col.done .qx{color:var(--teal)}
-  .qt{font-size:13px;line-height:1.4}
-  .qn{font-family:var(--mono);font-size:11px;color:var(--faint)}
-  .col.done .qt{text-decoration:line-through;text-decoration-color:var(--faint)}
-  .empty{font-family:var(--mono);font-size:11px;color:var(--faint);padding:6px 2px}
-  /* 装備 */
-  .equip{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px}
-  .eq{display:flex;align-items:center;gap:11px;background:var(--raised);border:1px solid var(--border);border-radius:11px;padding:11px 13px}
-  .eqi{font-size:24px;line-height:1}
-  .eqs{font-family:var(--mono);font-size:10px;color:var(--faint);letter-spacing:.1em}
-  .eqn{font-size:13px;font-weight:600;margin-top:2px}
-  .eqt{font-family:var(--mono);font-size:11px;color:var(--gold);font-weight:700}
-  /* 冒険マップ */
-  .journey{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px 22px}
-  .stages{display:flex;align-items:stretch;gap:0;overflow-x:auto;padding-bottom:6px}
-  .st{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:74px;opacity:.4}
-  .st.reached{opacity:.75}
-  .st.current{opacity:1}
-  .sti{font-size:24px;line-height:1;filter:grayscale(1) brightness(.8)}
-  .st.reached .sti,.st.current .sti{filter:none}
-  .st.current .sti{transform:scale(1.25)}
-  .stn{font-size:11px;text-align:center;line-height:1.25}
-  .st.current .stn{color:var(--gold);font-weight:700}
-  .stl{font-family:var(--mono);font-size:10px;color:var(--faint)}
-  .stsep{flex:1;min-width:14px;height:2px;align-self:flex-start;margin-top:13px;background:var(--border)}
-  .climb{margin-top:20px;padding-top:18px;border-top:1px dashed var(--border)}
-  .climb-ends{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;color:var(--muted);margin-bottom:10px}
-  .climb-ends .nx{color:var(--gold)}
-  .track{position:relative;height:14px;border-radius:8px;background:#11131a;border:1px solid var(--border);margin:14px 0 12px}
-  .track .fill{position:absolute;left:0;top:0;bottom:0;border-radius:8px;background:linear-gradient(90deg,var(--gold-dim),var(--gold));box-shadow:0 0 10px rgba(230,180,80,.4)}
-  .track .wp{position:absolute;top:50%;width:7px;height:7px;border-radius:50%;background:#11131a;border:1px solid var(--faint);transform:translate(-50%,-50%)}
-  .track .wp.reached{background:var(--gold);border-color:var(--gold)}
-  .track .wp.here{width:0;height:0;border:0}
-  .track .hiker{position:absolute;top:50%;transform:translate(-50%,-58%);font-size:18px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))}
-  .climb-foot{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--faint)}
-  .climb-foot .mid{color:var(--gold)}
-  .climb-done{font-family:var(--mono);font-size:13px;color:var(--gold);text-align:center;padding:8px}
-  /* 街 */
-  .city{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
-  .bd{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 8px 12px;text-align:center}
-  .bdi{font-size:30px;line-height:1}
-  .bdn{font-size:12px;font-weight:600;margin-top:8px}
-  .bdf{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:3px}
-  .bd.locked{opacity:.45;border-style:dashed}
-  @media(max-width:760px){.hero{grid-template-columns:1fr;justify-items:center;text-align:center}.pulse{grid-template-columns:repeat(2,1fr)}.badges{grid-template-columns:repeat(3,1fr)}.board{grid-template-columns:1fr}.equip{grid-template-columns:1fr}.city{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:880px){.hero{grid-template-columns:1fr}.equip{grid-template-columns:repeat(2,1fr)}.cityrow{grid-template-columns:1fr}.board{grid-template-columns:1fr}.badges{grid-template-columns:repeat(3,1fr)}.pulse{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:560px){.lvlcard,.charcard{grid-template-columns:1fr;justify-items:center;text-align:center}}
 </style>
 </head>
 <body>
 <div class="wrap">
+
   <div class="topbar">
-    <div><span class="eyebrow">Dev Cockpit</span><h1>${esc(projectName)}</h1></div>
+    <div class="b"><span class="eyebrow">Dev Cockpit</span><h1>${esc(projectName)}</h1></div>
     <span class="date">${genStr} 集計</span>
   </div>
 
-  <div class="card hero">
-    <div class="lvl"><span class="t">LV</span><span class="n">${lv.level}</span></div>
-    <div>
-      <p class="rank">${r.character.jobIcon} ${esc(r.character.fullName)} <span style="font-family:var(--mono);font-size:13px;font-weight:500;color:var(--muted)">/ Lv.${lv.level}</span></p>
-      <div class="since">${r.daysSinceStart != null ? `冒険開始から ${r.daysSinceStart} 日 · ` : ''}累計 ${lv.totalExp} EXP</div>
-      <div class="exprow"><span class="now">EXP <b>${lv.totalExp}</b> / ${lv.nextLevelAt}</span><span>次のレベルまで <b>${lv.toNext}</b></span></div>
-      <div class="bar"><span style="width:${pct}%"></span></div>
-      <div class="breakdown">
-        <div><div class="bn">${r.totalCommits}</div><div class="bl">総コミット</div></div>
-        <div><div class="bn">${r.mergedPRs}</div><div class="bl">マージPR</div></div>
-        <div><div class="bn">${r.releases}</div><div class="bl">リリース</div></div>
-        <div><div class="bn">${unlocked} / ${r.badges.length}</div><div class="bl">実績解除</div></div>
+  <div class="hero">
+    <div class="card lvlcard">
+      <div class="lvl"><span class="t">LV</span><span class="n">${lv.level}</span></div>
+      <div class="hmeta">
+        <p class="rank">${r.character.jobIcon} ${esc(r.character.fullName)} <small>/ Lv.${lv.level}</small></p>
+        <div class="since">${r.daysSinceStart != null ? `冒険開始から ${r.daysSinceStart} 日 · ` : ''}累計 ${nf(lv.totalExp)} EXP</div>
+        <div class="exprow"><span class="now">EXP <b>${nf(lv.totalExp)}</b> / ${nf(lv.nextLevelAt)}</span><span>次のレベルまで <b>${nf(lv.toNext)}</b></span></div>
+        <div class="bar"><span style="width:${pct}%"></span></div>
+        <div class="breakdown">
+          <div><div class="bn">${nf(r.totalCommits)}</div><div class="bl">総コミット</div></div>
+          <div><div class="bn">${r.mergedPRs}</div><div class="bl">マージPR</div></div>
+          <div><div class="bn">${r.releases}</div><div class="bl">リリース</div></div>
+          <div><div class="bn">${unlocked} / ${r.badges.length}</div><div class="bl">実績解除</div></div>
+        </div>
       </div>
     </div>
+    ${characterCard(r.character)}
   </div>
 
-  <div class="sh"><h2>装備</h2><span class="line"></span><span class="hint">活動量で自動強化</span></div>
-  <div class="equip">${equipmentRow(r.character.equipment)}</div>
+  <div class="sh"><h2>装備 / Equipment</h2><span class="line"></span><span class="hint">活動量で自動強化</span></div>
+  <div class="equip">${equipmentSlots(r.character.equipment)}</div>
 
-  <div class="sh"><h2>冒険マップ</h2><span class="line"></span><span class="hint">レベルで次の地へ進む</span></div>
-  <div class="journey">
-    <div class="stages">${stageTrack(r.journey)}</div>
-    ${climbMap(r.journey)}
-  </div>
+  <div class="sh"><h2>勢い / Momentum</h2><span class="line"></span><span class="hint">活動EXP（コミット+PR）の全期間推移</span></div>
+  ${momentumCard(r.momentum)}
 
   <div class="sh"><h2>今週のアクティビティ</h2><span class="line"></span><span class="hint">git + gh から自動集計</span></div>
   <div class="pulse">
@@ -274,15 +565,36 @@ export function renderHtml(projectName: string, r: DevReport): string {
     <div class="s xp"><div class="k">獲得EXP / 週</div><div class="v">+${r.weekExp}</div></div>
   </div>
 
+  <div class="sh"><h2>冒険の地図 / 次のステージへ</h2><span class="line"></span><span class="hint">レベル帯 = ステージ</span></div>
+  <div class="card journey">
+    ${overworld(r.journey)}
+    ${inStageMap(r.journey, r)}
+  </div>
+
+  <div class="sh"><h2>これまでの積み上げ / ${esc(projectName)}・シティ</h2><span class="line"></span><span class="hint">実績で建てられる建物が増える</span></div>
+  <div class="cityrow">
+    <div class="card citycard">
+      ${citySkyline(r.city)}
+      <div class="legend">
+        <span>🏙 街の建物 <b>${r.city.built} / ${r.city.total}</b></span>
+        <span>🪟 灯り = <b>コミット</b></span>
+        <span>🚧 = <b>未解放（バッジ待ち）</b></span>
+      </div>
+    </div>
+    <div class="card unlock">
+      <h3>建設できる建物</h3>
+      <div class="ub"><span class="uico">🏠</span><div class="un">開発者の家<small>最初から</small></div><span class="ustat ok">解放</span></div>
+      ${unlockList(r.city)}
+    </div>
+  </div>
+
 ${questBoardSection(r)}
 
   <div class="sh"><h2>実績バッジ</h2><span class="line"></span><span class="hint">${unlocked} / ${r.badges.length} 解除 · 街の建物が増える</span></div>
   <div class="badges">${badgeCells(r.badges)}</div>
 
-  <div class="sh"><h2>街</h2><span class="line"></span><span class="hint">${r.city.built} / ${r.city.total} 棟 · バッジ解放で発展</span></div>
-  <div class="city">${cityGrid(r.city)}</div>
+  <div class="note">🧭 すべて git / gh / GitHub Projects から自動集計。クエストの Size を設定すると EXP が増えます（XS=10〜XL=200、未設定は30）。装備・街・冒険マップ・勢いは活動量とバッジで自動的に育ちます。</div>
 
-  <div class="note">🧭 すべて git / gh / GitHub Projects から自動集計。クエストの Size を設定すると EXP が増えます（XS=10〜XL=200、未設定は30）。装備・街・冒険マップは活動量とバッジで自動的に育ちます。</div>
 </div>
 </body>
 </html>

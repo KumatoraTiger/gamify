@@ -63,12 +63,36 @@ describe('buildCharacter', () => {
     expect(bySlot.weapon?.name).toBe('騎士の長剣') // 350<=421<700
     expect(bySlot.armor?.name).toBe('板金鎧') // 60<=121<150
     expect(bySlot.accessory?.name).toBe('炎の護符') // 7<=9<21
-    expect(c.equipment).toHaveLength(3)
+    expect(bySlot.title?.name).toBe('一人前') // Lv15
+    expect(c.equipment).toHaveLength(4)
   })
 
-  it('活動ゼロでも最低段階の装備が付く', () => {
+  it('tier からレアリティが決まる', () => {
+    const c = buildCharacter({ ...base, level: 15, totalCommits: 421, mergedPRs: 121 })
+    const bySlot = Object.fromEntries(c.equipment.map((e) => [e.slot, e]))
+    expect(bySlot.weapon?.rarity).toBe('SR') // tier3
+    expect(bySlot.armor?.rarity).toBe('SR') // tier3
+  })
+
+  it('活動ゼロでも最低段階の装備が付く（武器/防具/アクセサリ）', () => {
     const c = buildCharacter(base)
-    expect(c.equipment.every((e) => e.tier === 0)).toBe(true)
-    expect(c.equipment.map((e) => e.name)).toEqual(['木の枝', '布の服', '旅の指輪'])
+    expect(c.equipment.filter((e) => e.slot !== 'title').every((e) => e.tier === 0)).toBe(true)
+    expect(c.equipment.slice(0, 3).map((e) => e.name)).toEqual(['木の枝', '布の服', '旅の指輪'])
+  })
+
+  it('ステータス4種と次の称号を出す', () => {
+    const c = buildCharacter({
+      ...base,
+      level: 15,
+      totalCommits: 421,
+      mergedPRs: 121,
+      longestStreak: 9,
+    })
+    expect(c.stats.map((s) => s.key)).toEqual(['atk', 'def', 'spd', 'mag'])
+    const atk = c.stats.find((s) => s.key === 'atk')
+    expect(atk?.value).toBe(421)
+    expect(atk?.pct).toBe(70) // 421/600
+    expect(c.nextTitle).toEqual({ title: '熟練', atLevel: 20 })
+    expect(c.avatar).toBe('🗡️') // 剣士
   })
 })
