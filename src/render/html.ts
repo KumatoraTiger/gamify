@@ -7,7 +7,7 @@
 import type { Character } from '../domain/character'
 import type { CityState } from '../domain/city'
 import type { JourneyState, Terrain } from '../domain/journey'
-import type { Momentum, MomentumSeries } from '../domain/momentum'
+import type { MomentumSeries } from '../domain/momentum'
 import type { DevReport } from '../domain/report'
 
 const esc = (s: string): string =>
@@ -71,14 +71,36 @@ function equipmentSlots(eq: Character['equipment']): string {
 }
 
 /* ===== 勢い（Momentum）===== */
-// 1期間ぶんの折れ線チャート本体（SVG + x軸）を描く。
+const MOM_W = 800
+const MOM_H = 170
+const MOM_BASE = 140
+const MOM_TOP = 18
+
+// y軸の「きりのいい」XP目盛りを ~3 区切りで求める。
+function niceYTicks(min: number, max: number): number[] {
+  const range = max - min
+  if (range <= 0) return [max]
+  const rough = range / 3
+  const mag = 10 ** Math.floor(Math.log10(rough))
+  const norm = rough / mag
+  const stepUnit = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10
+  const step = stepUnit * mag
+  const ticks: number[] = []
+  const start = Math.ceil(min / step) * step
+  for (let v = start; v <= max + step * 0.001; v += step) ticks.push(Math.round(v))
+  return ticks
+}
+
+// 1期間ぶんの折れ線チャート（mview divごと）を描く。
 // 折れ線は minExp（期間開始時点の累計）〜maxExp の範囲を縦幅いっぱいに使う。
-function momentumChart(m: Momentum, gid: string): string {
-  const W = 800
-  const H = 170
-  const base = 140
-  const top = 18
+// y軸のXP目盛り(HTML)とホバー用オーバーレイ(cross/dot/tip)、ホバー用の座標データを持たせる。
+function momentumChart(s: MomentumSeries): string {
+  const m = s.momentum
+  const W = MOM_W
+  const base = MOM_BASE
+  const top = MOM_TOP
   const mid = (base + top) / 2
+  const gid = `mg-${s.key}`
   const span = m.endMs - m.startMs || 1
   const rng = m.maxExp - m.minExp
   const yOf = (exp: number): number =>
@@ -88,7 +110,18 @@ function momentumChart(m: Momentum, gid: string): string {
   const first = xy[0] ?? [0, base]
   const lastP = xy[xy.length - 1] ?? [W, base]
   const area = `${first[0].toFixed(1)},${base} ${line} ${lastP[0].toFixed(1)},${base}`
-  const grid = m.months
+
+  // y軸: きりのいいXP値で水平グリッド＋ラベル
+  let hGrid = ''
+  let yLabels = ''
+  for (const t of niceYTicks(m.minExp, m.maxExp)) {
+    const ty = rng > 0 ? base - ((t - m.minExp) / rng) * (base - top) : mid
+    if (ty < top - 1 || ty > base + 1) continue
+    hGrid += `<line x1="0" y1="${ty.toFixed(1)}" x2="${W}" y2="${ty.toFixed(1)}" stroke="#2E3342" stroke-dasharray="3 6"/>`
+    yLabels += `<span class="ytick" style="top:${ty.toFixed(1)}px">${nf(t)}</span>`
+  }
+
+  const vGrid = m.months
     .map((mo) => {
       const x = (mo.pos * W).toFixed(1)
       return `<line x1="${x}" y1="${top}" x2="${x}" y2="${base}" stroke="#2E3342" stroke-dasharray="2 7" opacity="0.6"/>`
@@ -100,23 +133,35 @@ function momentumChart(m: Momentum, gid: string): string {
   const picked = m.months.filter((_, i) => i % step === 0)
   const axis = `<span>開始</span>${picked.map((mo) => `<span>${esc(mo.label)}</span>`).join('')}<span>今</span>`
 
+  // ホバー用: [viewBox x, viewBox y, 累計EXP, 時刻ms] の並び。JS が最近傍点を引く。
+  const dp = m.points.map((p, i) => [
+    Number(xy[i]![0].toFixed(1)),
+    Number(xy[i]![1].toFixed(1)),
+    p.exp,
+    p.tMs,
+  ])
+
   return `
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+  <div class="mview mv-${s.key}" data-points='${JSON.stringify(dp)}'>
+    <div class="yaxis">${yLabels}</div>
+    <span class="mcross"></span><span class="mdot"></span><span class="mtip"></span>
+    <svg viewBox="0 0 ${W} ${MOM_H}" preserveAspectRatio="none" aria-hidden="true">
       <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="#E6B450" stop-opacity="0.32"/>
         <stop offset="1" stop-color="#E6B450" stop-opacity="0"/></linearGradient></defs>
       <line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="#2E3342"/>
-      <line x1="0" y1="92" x2="${W}" y2="92" stroke="#2E3342" stroke-dasharray="3 6"/>
-      <line x1="0" y1="44" x2="${W}" y2="44" stroke="#2E3342" stroke-dasharray="3 6"/>
-      ${grid}
+      ${hGrid}
+      ${vGrid}
       <polygon points="${area}" fill="url(#${gid})"/>
       <polyline points="${line}" fill="none" stroke="#E6B450" stroke-width="2.6"/>
       <circle cx="${lastP[0].toFixed(1)}" cy="${lastP[1].toFixed(1)}" r="4.5" fill="#E6B450"/>
     </svg>
-    <div class="xaxis">${axis}</div>`
+    <div class="xaxis">${axis}</div>
+  </div>`
 }
 
-// 期間タブ付きの勢いカード。全期間分を事前描画し、CSSラジオで切り替える（JS不要）。
+// 期間タブ付きの勢いカード。全期間分を事前描画し、CSSラジオで切り替える。
+// 折れ線ホバーのツールチップだけ末尾のインラインJS（momentumHoverScript）が担当する。
 function momentumCard(series: MomentumSeries[]): string {
   if (series.length === 0) return ''
   // 大きな数字（現在の累計）と今週デルタは期間非依存なので先頭系列から取る
@@ -133,9 +178,7 @@ function momentumCard(series: MomentumSeries[]): string {
   const labels = series
     .map((s) => `<label for="mr-${s.key}" class="r-${s.key}">${esc(s.label)}</label>`)
     .join('')
-  const views = series
-    .map((s) => `<div class="mview mv-${s.key}">${momentumChart(s.momentum, `mg-${s.key}`)}</div>`)
-    .join('')
+  const views = series.map(momentumChart).join('')
 
   return `
   <div class="card momentum">
@@ -146,6 +189,39 @@ function momentumCard(series: MomentumSeries[]): string {
     </div>
     ${views}
   </div>`
+}
+
+// 折れ線ホバー用のインラインJS。カーソル位置に最も近いサンプル点を求め、
+// 縦カーソル線・点・ツールチップ（日付＋累計XP）を表示する。CSPの無いローカルHTMLで動く。
+function momentumHoverScript(): string {
+  return `<script>
+(function(){
+  var nf=function(n){return n.toLocaleString('en-US')};
+  var fd=function(ms){var d=new Date(ms);return (d.getMonth()+1)+'/'+d.getDate()+' '+d.getFullYear()};
+  var views=document.querySelectorAll('.momentum .mview');
+  for(var v=0;v<views.length;v++){(function(view){
+    var svg=view.querySelector('svg');
+    var pts;try{pts=JSON.parse(view.getAttribute('data-points')||'[]')}catch(e){pts=[]}
+    if(!svg||!pts.length)return;
+    var cross=view.querySelector('.mcross'),dot=view.querySelector('.mdot'),tip=view.querySelector('.mtip');
+    view.addEventListener('mousemove',function(e){
+      var r=svg.getBoundingClientRect();
+      var frac=(e.clientX-r.left)/r.width;
+      if(frac<0)frac=0;if(frac>1)frac=1;
+      var vbx=frac*${MOM_W},bi=0,bd=1e9;
+      for(var i=0;i<pts.length;i++){var d=Math.abs(pts[i][0]-vbx);if(d<bd){bd=d;bi=i}}
+      var p=pts[bi];
+      var px=(p[0]/${MOM_W})*r.width,py=(p[1]/${MOM_H})*r.height;
+      cross.style.left=px+'px';
+      dot.style.left=px+'px';dot.style.top=py+'px';
+      tip.style.left=px+'px';tip.style.top=py+'px';
+      tip.innerHTML=fd(p[3])+'<br>'+nf(p[2])+' XP';
+      view.classList.add('hovering');
+    });
+    view.addEventListener('mouseleave',function(){view.classList.remove('hovering')});
+  })(views[v])}
+})();
+</script>`
 }
 
 /* ===== 冒険マップ（オーバーワールド + 登山）===== */
@@ -623,8 +699,15 @@ export function renderHtml(projectName: string, r: DevReport): string {
   .momentum .mview{display:none}
   .momentum #mr-all:checked~.mv-all,.momentum #mr-3y:checked~.mv-3y,.momentum #mr-1y:checked~.mv-1y,.momentum #mr-3m:checked~.mv-3m,.momentum #mr-1m:checked~.mv-1m{display:block}
   .momentum #mr-all:checked~.pxrow .r-all,.momentum #mr-3y:checked~.pxrow .r-3y,.momentum #mr-1y:checked~.pxrow .r-1y,.momentum #mr-3m:checked~.pxrow .r-3m,.momentum #mr-1m:checked~.pxrow .r-1m{color:var(--gold);border-color:var(--gold-dim);background:rgba(230,180,80,.1)}
+  .momentum .mview{position:relative}
   .momentum svg{display:block;width:100%;height:170px}
   .momentum .xaxis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:6px}
+  .momentum .yaxis{position:absolute;inset:0;pointer-events:none}
+  .momentum .ytick{position:absolute;left:2px;transform:translateY(-50%);font-family:var(--mono);font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;background:rgba(29,32,42,.72);padding:0 4px;border-radius:3px}
+  .momentum .mcross{position:absolute;top:0;height:140px;width:1px;background:var(--gold-dim);opacity:0;pointer-events:none;transition:opacity .1s}
+  .momentum .mdot{position:absolute;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;background:var(--gold);box-shadow:0 0 0 3px rgba(230,180,80,.22);opacity:0;pointer-events:none}
+  .momentum .mtip{position:absolute;transform:translate(-50%,calc(-100% - 11px));white-space:nowrap;font-family:var(--mono);font-size:11px;line-height:1.35;color:var(--text);background:var(--raised);border:1px solid var(--border);border-radius:7px;padding:5px 9px;opacity:0;pointer-events:none;z-index:3;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,.35)}
+  .momentum .mview.hovering .mcross,.momentum .mview.hovering .mdot,.momentum .mview.hovering .mtip{opacity:1}
   .pulse{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
   .pulse .s{background:var(--panel);border:1px solid var(--border);border-radius:13px;padding:16px 17px}
   .pulse .s .k{font-family:var(--mono);font-size:11px;color:var(--muted)}
@@ -777,6 +860,7 @@ ${questBoardSection(r)}
   <div class="note">🧭 すべて git / gh / GitHub Projects から自動集計。クエストの Size を設定すると EXP が増えます（XS=10〜XL=200、未設定は30）。装備・街・冒険マップ・勢いは活動量とバッジで自動的に育ちます。</div>
 
 </div>
+${momentumHoverScript()}
 </body>
 </html>
 `
