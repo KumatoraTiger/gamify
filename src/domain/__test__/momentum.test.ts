@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMomentum } from '../momentum'
+import { MOMENTUM_PERIODS, buildMomentum, buildMomentumSeries } from '../momentum'
 
 const d = (iso: string) => new Date(iso)
 
@@ -44,6 +44,54 @@ describe('buildMomentum', () => {
     expect(m.weekDelta).toBe(5) // 6/20 の 1コミットのみ
     // prev = 10-5 = 5 → 100%
     expect(m.weekPct).toBeCloseTo(100, 5)
+  })
+
+  it('期間ウィンドウを指定すると開始時点の累計がベースライン(minExp)になる', () => {
+    // 古い活動(2024)＋窓内の活動(2026/06)
+    const m = buildMomentum(
+      {
+        commitDates: [d('2024-01-01'), d('2024-06-01'), d('2026-06-20')],
+        prDates: [],
+        perCommit: 5,
+        perMergedPR: 25,
+      },
+      today,
+      60,
+      30, // 直近30日窓
+    )
+    // 窓開始(=今から30日前)より前の 2コミット*5 = 10 がベースライン
+    expect(m.minExp).toBe(10)
+    // 現在の累計は全イベント込み 3*5 = 15
+    expect(m.latestExp).toBe(15)
+    expect(m.points.at(-1)?.exp).toBe(15)
+    // 窓開始は「今-30日」あたり（最初のイベントより後）
+    expect(m.startMs).toBeGreaterThan(d('2026-05-01').getTime())
+  })
+
+  it('窓が最初のイベントより長ければ全期間と同じ範囲になる', () => {
+    const input = {
+      commitDates: [d('2026-05-01'), d('2026-06-20')],
+      prDates: [],
+      perCommit: 5,
+      perMergedPR: 25,
+    }
+    const all = buildMomentum(input, today)
+    const y3 = buildMomentum(input, today, 60, 365 * 3)
+    expect(y3.startMs).toBe(all.startMs)
+    expect(y3.minExp).toBe(0)
+  })
+
+  it('buildMomentumSeries は全期間を含む5系列を既定ラベルで返す', () => {
+    const series = buildMomentumSeries(
+      { commitDates: [d('2026-06-20')], prDates: [], perCommit: 5, perMergedPR: 25 },
+      today,
+    )
+    expect(series.map((s) => s.key)).toEqual(['all', '3y', '1y', '3m', '1m'])
+    expect(series.map((s) => s.label)).toEqual(['全期間', '3年', '1年', '3ヶ月', '1ヶ月'])
+    expect(series[0]?.key).toBe('all')
+    // どの系列でも現在の累計は同じ
+    expect(new Set(series.map((s) => s.momentum.latestExp)).size).toBe(1)
+    expect(MOMENTUM_PERIODS).toHaveLength(5)
   })
 
   it('月目盛りを範囲内で生成する', () => {

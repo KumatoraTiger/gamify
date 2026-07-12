@@ -31,6 +31,7 @@ export interface Momentum {
   points: MomentumPoint[]
   startMs: number
   endMs: number
+  /** 表示範囲の下端。全期間は0、期間窓では「窓開始時点の累計EXP」 */
   minExp: number
   maxExp: number
   /** 最新（=今）の累計活動EXP */
@@ -44,7 +45,57 @@ export interface Momentum {
 
 const DAY_MS = 86_400_000
 
-export function buildMomentum(input: MomentumInput, today: Date, samples = 60): Momentum {
+/** 表示期間の種類 */
+export type PeriodKey = 'all' | '3y' | '1y' | '3m' | '1m'
+
+export interface Period {
+  key: PeriodKey
+  label: string
+  /** さかのぼる日数。null は全期間 */
+  days: number | null
+}
+
+/** 選択できる期間（先頭がデフォルト） */
+export const MOMENTUM_PERIODS: Period[] = [
+  { key: 'all', label: '全期間', days: null },
+  { key: '3y', label: '3年', days: 365 * 3 },
+  { key: '1y', label: '1年', days: 365 },
+  { key: '3m', label: '3ヶ月', days: 90 },
+  { key: '1m', label: '1ヶ月', days: 30 },
+]
+
+export interface MomentumSeries {
+  key: PeriodKey
+  label: string
+  momentum: Momentum
+}
+
+/**
+ * 全期間の入力から、各表示期間ぶんの Momentum をまとめて構築する。
+ * 大きな数字（現在の累計）や今週デルタは期間非依存で共通、折れ線だけ窓ごとにズームする。
+ */
+export function buildMomentumSeries(
+  input: MomentumInput,
+  today: Date,
+  samples = 60,
+): MomentumSeries[] {
+  return MOMENTUM_PERIODS.map((p) => ({
+    key: p.key,
+    label: p.label,
+    momentum: buildMomentum(input, today, samples, p.days),
+  }))
+}
+
+/**
+ * @param windowDays 直近この日数だけを表示範囲にする（null=全期間）。
+ *   窓開始より前の活動EXPはベースライン(minExp)として折れ線の下端になる。
+ */
+export function buildMomentum(
+  input: MomentumInput,
+  today: Date,
+  samples = 60,
+  windowDays: number | null = null,
+): Momentum {
   const events: { t: number; v: number }[] = []
   for (const d of input.commitDates) events.push({ t: d.getTime(), v: input.perCommit })
   for (const d of input.prDates) events.push({ t: d.getTime(), v: input.perMergedPR })
@@ -70,13 +121,23 @@ export function buildMomentum(input: MomentumInput, today: Date, samples = 60): 
     }
   }
 
-  let startMs = events[0]?.t ?? endMs - DAY_MS
+  const firstMs = events[0]?.t ?? endMs - DAY_MS
+  // 窓指定があれば「今からwindowDays前」まで、ただし最初のイベントより前には遡らない
+  let startMs = firstMs
+  if (windowDays != null) startMs = Math.max(firstMs, endMs - windowDays * DAY_MS)
   if (startMs >= endMs) startMs = endMs - DAY_MS
+
+  // 窓開始より前のEXPはベースライン（折れ線の下端＝minExp）
+  let idx = 0
+  let acc = 0
+  while (idx < events.length && (events[idx]?.t ?? Number.POSITIVE_INFINITY) < startMs) {
+    acc += events[idx]?.v ?? 0
+    idx++
+  }
+  const baseline = acc
 
   // 累計をサンプリング（境界時刻ごとに、それ以前のイベントEXPを合算）
   const points: MomentumPoint[] = []
-  let idx = 0
-  let acc = 0
   for (let i = 0; i <= samples; i++) {
     const boundary = startMs + ((endMs - startMs) * i) / samples
     while (idx < events.length && (events[idx]?.t ?? Number.POSITIVE_INFINITY) <= boundary) {
@@ -114,7 +175,7 @@ export function buildMomentum(input: MomentumInput, today: Date, samples = 60): 
     points,
     startMs,
     endMs,
-    minExp: 0,
+    minExp: baseline,
     maxExp: total,
     latestExp: total,
     weekDelta,

@@ -7,7 +7,7 @@
 import type { Character } from '../domain/character'
 import type { CityState } from '../domain/city'
 import type { JourneyState, Terrain } from '../domain/journey'
-import type { Momentum } from '../domain/momentum'
+import type { Momentum, MomentumSeries } from '../domain/momentum'
 import type { DevReport } from '../domain/report'
 
 const esc = (s: string): string =>
@@ -71,18 +71,19 @@ function equipmentSlots(eq: Character['equipment']): string {
 }
 
 /* ===== 勢い（Momentum）===== */
-function momentumCard(m: Momentum): string {
+// 1期間ぶんの折れ線チャート本体（SVG + x軸）を描く。
+// 折れ線は minExp（期間開始時点の累計）〜maxExp の範囲を縦幅いっぱいに使う。
+function momentumChart(m: Momentum, gid: string): string {
   const W = 800
   const H = 170
   const base = 140
   const top = 18
+  const mid = (base + top) / 2
   const span = m.endMs - m.startMs || 1
-  const maxE = m.maxExp || 1
-  const xy = m.points.map((p) => {
-    const x = ((p.tMs - m.startMs) / span) * W
-    const y = base - (p.exp / maxE) * (base - top)
-    return [x, y] as const
-  })
+  const rng = m.maxExp - m.minExp
+  const yOf = (exp: number): number =>
+    rng > 0 ? base - ((exp - m.minExp) / rng) * (base - top) : mid
+  const xy = m.points.map((p) => [((p.tMs - m.startMs) / span) * W, yOf(p.exp)] as const)
   const line = xy.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
   const first = xy[0] ?? [0, base]
   const lastP = xy[xy.length - 1] ?? [W, base]
@@ -99,28 +100,51 @@ function momentumCard(m: Momentum): string {
   const picked = m.months.filter((_, i) => i % step === 0)
   const axis = `<span>開始</span>${picked.map((mo) => `<span>${esc(mo.label)}</span>`).join('')}<span>今</span>`
 
-  const up = m.weekDelta >= 0
-  const chg = `${up ? '▲' : '▼'} ${up ? '+' : ''}${m.weekDelta} XP (${up ? '+' : ''}${m.weekPct.toFixed(1)}%) 今週`
-
   return `
-  <div class="card momentum">
-    <div class="pxrow">
-      <span class="px">${nf(m.latestExp)}</span><span class="chg">${chg}</span>
-      <span class="ranges"><span class="on">全期間</span></span>
-    </div>
     <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
-      <defs><linearGradient id="mg" x1="0" y1="0" x2="0" y2="1">
+      <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="#E6B450" stop-opacity="0.32"/>
         <stop offset="1" stop-color="#E6B450" stop-opacity="0"/></linearGradient></defs>
       <line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="#2E3342"/>
       <line x1="0" y1="92" x2="${W}" y2="92" stroke="#2E3342" stroke-dasharray="3 6"/>
       <line x1="0" y1="44" x2="${W}" y2="44" stroke="#2E3342" stroke-dasharray="3 6"/>
       ${grid}
-      <polygon points="${area}" fill="url(#mg)"/>
+      <polygon points="${area}" fill="url(#${gid})"/>
       <polyline points="${line}" fill="none" stroke="#E6B450" stroke-width="2.6"/>
       <circle cx="${lastP[0].toFixed(1)}" cy="${lastP[1].toFixed(1)}" r="4.5" fill="#E6B450"/>
     </svg>
-    <div class="xaxis">${axis}</div>
+    <div class="xaxis">${axis}</div>`
+}
+
+// 期間タブ付きの勢いカード。全期間分を事前描画し、CSSラジオで切り替える（JS不要）。
+function momentumCard(series: MomentumSeries[]): string {
+  if (series.length === 0) return ''
+  // 大きな数字（現在の累計）と今週デルタは期間非依存なので先頭系列から取る
+  const head = series[0]!.momentum
+  const up = head.weekDelta >= 0
+  const chg = `${up ? '▲' : '▼'} ${up ? '+' : ''}${head.weekDelta} XP (${up ? '+' : ''}${head.weekPct.toFixed(1)}%) 今週`
+
+  const radios = series
+    .map(
+      (s, i) =>
+        `<input class="mr" type="radio" name="mrange" id="mr-${s.key}"${i === 0 ? ' checked' : ''}>`,
+    )
+    .join('')
+  const labels = series
+    .map((s) => `<label for="mr-${s.key}" class="r-${s.key}">${esc(s.label)}</label>`)
+    .join('')
+  const views = series
+    .map((s) => `<div class="mview mv-${s.key}">${momentumChart(s.momentum, `mg-${s.key}`)}</div>`)
+    .join('')
+
+  return `
+  <div class="card momentum">
+    ${radios}
+    <div class="pxrow">
+      <span class="px">${nf(head.latestExp)}</span><span class="chg">${chg}</span>
+      <span class="ranges">${labels}</span>
+    </div>
+    ${views}
   </div>`
 }
 
@@ -593,7 +617,12 @@ export function renderHtml(projectName: string, r: DevReport): string {
   .momentum .px{font-family:var(--mono);font-size:30px;font-weight:700;font-variant-numeric:tabular-nums}
   .momentum .chg{font-family:var(--mono);font-size:13px;color:var(--teal)}
   .momentum .ranges{margin-left:auto;display:flex;gap:6px}
-  .momentum .ranges span{font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:6px;color:var(--gold);border:1px solid var(--gold-dim);background:rgba(230,180,80,.1)}
+  .momentum .ranges label{cursor:pointer;font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:6px;color:var(--faint);border:1px solid transparent;transition:color .12s,background .12s,border-color .12s}
+  .momentum .ranges label:hover{color:var(--gold)}
+  .momentum .mr{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+  .momentum .mview{display:none}
+  .momentum #mr-all:checked~.mv-all,.momentum #mr-3y:checked~.mv-3y,.momentum #mr-1y:checked~.mv-1y,.momentum #mr-3m:checked~.mv-3m,.momentum #mr-1m:checked~.mv-1m{display:block}
+  .momentum #mr-all:checked~.pxrow .r-all,.momentum #mr-3y:checked~.pxrow .r-3y,.momentum #mr-1y:checked~.pxrow .r-1y,.momentum #mr-3m:checked~.pxrow .r-3m,.momentum #mr-1m:checked~.pxrow .r-1m{color:var(--gold);border-color:var(--gold-dim);background:rgba(230,180,80,.1)}
   .momentum svg{display:block;width:100%;height:170px}
   .momentum .xaxis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:6px}
   .pulse{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
@@ -706,8 +735,8 @@ export function renderHtml(projectName: string, r: DevReport): string {
   <div class="sh"><h2>装備 / Equipment</h2><span class="line"></span><span class="hint">活動量で自動強化</span></div>
   <div class="equip">${equipmentSlots(r.character.equipment)}</div>
 
-  <div class="sh"><h2>勢い / Momentum</h2><span class="line"></span><span class="hint">活動EXP（コミット+PR）の全期間推移</span></div>
-  ${momentumCard(r.momentum)}
+  <div class="sh"><h2>勢い / Momentum</h2><span class="line"></span><span class="hint">活動EXP（コミット+PR）の累計推移・期間を切替</span></div>
+  ${momentumCard(r.momentums)}
 
   <div class="sh"><h2>今週のアクティビティ</h2><span class="line"></span><span class="hint">git + gh から自動集計</span></div>
   <div class="pulse">
