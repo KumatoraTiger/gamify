@@ -20,9 +20,39 @@ export interface CommitInfo {
   subject: string
 }
 
-export function readCommits(repoPath: string, author?: string): CommitInfo[] {
+/**
+ * origin のデフォルトブランチ ref（例 `origin/develop`）を返す。
+ * これを読めばチェックアウト中のブランチや作業ツリーの状態に左右されない。
+ * origin が無い/origin/HEAD 未設定のローカル専用リポジトリでは undefined を返し、
+ * 呼び出し側はチェックアウト中の HEAD にフォールバックする。
+ */
+export function remoteDefaultRef(repoPath: string): string | undefined {
+  try {
+    const ref = git(repoPath, ['rev-parse', '--abbrev-ref', 'origin/HEAD']).trim()
+    return ref || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * origin を fetch して追跡ブランチを最新化する（opt-in）。
+ * ネットワーク往復が発生する。オフライン等で失敗しても集計は続行する。
+ */
+export function fetchRepo(repoPath: string): boolean {
+  try {
+    git(repoPath, ['fetch', '--quiet', 'origin'])
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** コミットを読む。ref 指定時はその ref から辿る（未指定ならチェックアウト中の HEAD） */
+export function readCommits(repoPath: string, author?: string, ref?: string): CommitInfo[] {
   const args = ['log', `--pretty=format:%H${UNIT}%cI${UNIT}%an${UNIT}%s`, '--no-merges']
   if (author) args.push(`--author=${author}`)
+  if (ref) args.push(ref)
   const out = git(repoPath, args)
   return out
     .split('\n')

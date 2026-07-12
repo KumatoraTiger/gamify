@@ -35,6 +35,13 @@ export interface GamifyConfig {
   releaseSource?: 'auto' | 'gh' | 'tags' | 'none'
   /** 開発開始日（ISO。日数表示用） */
   startDate?: string
+  /**
+   * 集計前に origin を fetch して追跡ブランチを最新化するか（既定 true）。
+   * fetch は差分転送なので最新時はほぼコストゼロで、常に真の最新を反映できる。
+   * false にすると fetch を省き、origin/HEAD（前回 fetch 済みの内容）を読む。
+   * どちらでもローカルのチェックアウト状態には左右されない。
+   */
+  fetchBeforeRead?: boolean
   levelCurve: LevelCurve
   exp: ExpRules
   badges: BadgeDef[]

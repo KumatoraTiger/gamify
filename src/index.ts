@@ -1,7 +1,13 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { config } from '../config'
-import { countReleaseTags, detectRepoSlug, readCommits } from './collectors/git'
+import {
+  countReleaseTags,
+  detectRepoSlug,
+  fetchRepo,
+  readCommits,
+  remoteDefaultRef,
+} from './collectors/git'
 import { countGhReleases, readMergedPRs } from './collectors/gh'
 import { readQuests } from './collectors/projects'
 import { buildQuestBoard } from './domain/quests'
@@ -29,7 +35,14 @@ function resolveReleases(slug: string | undefined): number {
 function main(): void {
   const slug = config.repoSlug ?? detectRepoSlug(config.repoPath)
 
-  const commits = readCommits(config.repoPath, config.author)
+  // 既定で origin を fetch して追跡ブランチを最新化してから読む（config で無効化可能）
+  if ((config.fetchBeforeRead ?? true) && !fetchRepo(config.repoPath)) {
+    console.log('  ⚠ git fetch に失敗（オフライン等）。取り込み済みの origin で集計します')
+  }
+
+  // origin のデフォルトブランチを読む。無ければチェックアウト中の HEAD にフォールバック
+  const ref = remoteDefaultRef(config.repoPath)
+  const commits = readCommits(config.repoPath, config.author, ref)
   const releases = resolveReleases(slug)
   const prs = slug ? readMergedPRs(slug, config.ghAuthor) : []
 

@@ -14,6 +14,10 @@ export const config: GamifyConfig = {
   ghAuthor: '@me',
   releaseSource: 'auto', // gh Releases 優先・タグ fallback
   startDate: undefined, // 未指定なら最初のコミット日から算出
+  // 既定 true: origin/HEAD（リモートのデフォルトブランチ）を読み、集計前に git fetch
+  // して真の最新を反映する。ローカルのチェックアウト状態には左右されない。
+  // オフライン中心なら false にすると fetch を省ける。
+  fetchBeforeRead: true,
 
   levelCurve: { base: 150, step: 30 },
 
