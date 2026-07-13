@@ -126,10 +126,15 @@ function momentumChart(s: MomentumSeries, metric: MetricKey): string {
   const mid = (base + top) / 2
   const gid = `mg-${s.key}-${metric}`
   const span = m.endMs - m.startMs || 1
-  const minV = isLv ? m.minLv : m.minExp
-  const maxV = isLv ? m.maxLv : m.maxExp
+  // EXP は実値の下端〜上端で正規化。レベルは「その時点の整数レベル」を階段状に
+  // プロットする（EXPに比例した曲線ではなく、レベルそのものの推移）。y軸は整数
+  // レベル境界に合わせ、レベルが上がった瞬間だけ段差になる。
+  const loLv = Math.floor(m.minLv)
+  const hiLv = Math.floor(m.maxLv)
+  const minV = isLv ? loLv : m.minExp
+  const maxV = isLv ? (hiLv > loLv ? hiLv : loLv + 1) : m.maxExp
   const rng = maxV - minV
-  const valOf = (p: (typeof m.points)[number]): number => (isLv ? (p.lv ?? 1) : p.exp)
+  const valOf = (p: (typeof m.points)[number]): number => (isLv ? Math.floor(p.lv ?? 1) : p.exp)
   const yOf = (v: number): number => (rng > 0 ? base - ((v - minV) / rng) * (base - top) : mid)
   const xy = m.points.map((p) => [((p.tMs - m.startMs) / span) * W, yOf(valOf(p))] as const)
   const line = xy.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
@@ -165,7 +170,7 @@ function momentumChart(s: MomentumSeries, metric: MetricKey): string {
   const dp = m.points.map((p, i) => [
     Number(xy[i]![0].toFixed(1)),
     Number(xy[i]![1].toFixed(1)),
-    isLv ? Math.floor(valOf(p)) : p.exp,
+    valOf(p),
     p.tMs,
   ])
 
@@ -866,7 +871,7 @@ export function renderHtml(projectName: string, r: DevReport): string {
   <div class="equip">${equipmentSlots(r.character.equipment)}</div>
 
   <div class="sh"><h2>勢い / Momentum</h2><span class="line"></span><span class="hint">活動EXP（コミット+PR）の累計 / レベル推移・指標と期間を切替</span></div>
-  ${momentumCard(r.momentums, r.level)}
+  ${momentumCard(r.momentums, r.momentumLevel)}
 
   <div class="sh"><h2>今週のアクティビティ</h2><span class="line"></span><span class="hint">git + gh から自動集計</span></div>
   <div class="pulse">

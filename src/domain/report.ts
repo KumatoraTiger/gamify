@@ -31,6 +31,8 @@ export interface DevReport {
   totalExp: number
   weekExp: number
   level: LevelInfo
+  /** 勢いカードの折れ線（活動EXPのみ）に対応するレベル。見出し表示用 */
+  momentumLevel: LevelInfo
   currentStreak: number
   longestStreak: number
   weekCommits: number
@@ -103,6 +105,10 @@ export function buildReport(config: GamifyConfig, raw: RawData): DevReport {
   }
 
   const level = levelFromExp(totalExp, config.levelCurve)
+  // 勢いカードの見出し用。折れ線は日付を持つ活動EXP（コミット+PR）のみを追うので、
+  // その線と一致するレベルを別途出す（リリース/クエストEXPを含む total とはズレうる）。
+  const activityExp = computeTotalExp(config.exp, { commits: totalCommits, mergedPRs, releases: 0 })
+  const momentumLevel = levelFromExp(activityExp, config.levelCurve)
   const longest = longestStreak(dayKeys)
 
   const character = buildCharacter({
@@ -133,6 +139,7 @@ export function buildReport(config: GamifyConfig, raw: RawData): DevReport {
     totalExp,
     weekExp,
     level,
+    momentumLevel,
     currentStreak: currentStreak(dayKeys, raw.today),
     longestStreak: longest,
     weekCommits,
