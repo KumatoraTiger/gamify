@@ -6,17 +6,23 @@
  * リリース/クエストEXPは日付を持たないためこの推移線には含めない（活動EXPのみ）。
  */
 
+import { type LevelCurve, levelFromExp } from './level'
+
 export interface MomentumInput {
   commitDates: Date[]
   prDates: Date[]
   perCommit: number
   perMergedPR: number
+  /** 指定するとレベル推移も算出する（レベル表示タブ用） */
+  levelCurve?: LevelCurve
 }
 
 export interface MomentumPoint {
   tMs: number
   /** その時点までの累計活動EXP */
   exp: number
+  /** その時点のレベル（進捗込みの小数。levelCurve 指定時のみ） */
+  lv?: number
 }
 
 export interface MonthTick {
@@ -36,6 +42,10 @@ export interface Momentum {
   maxExp: number
   /** 最新（=今）の累計活動EXP */
   latestExp: number
+  /** レベル表示範囲の下端/上端/最新（levelCurve 指定時のみ。小数レベル） */
+  minLv: number
+  maxLv: number
+  latestLv: number
   /** 直近7日で増えたEXP */
   weekDelta: number
   /** 直近7日の増加率（%） */
@@ -44,6 +54,12 @@ export interface Momentum {
 }
 
 const DAY_MS = 86_400_000
+
+/** 累計EXPを「進捗込みの小数レベル」に変換する（Lv内の進捗を小数部に乗せる） */
+function lvFloat(exp: number, curve: LevelCurve): number {
+  const li = levelFromExp(exp, curve)
+  return li.level + li.progress
+}
 
 /** 表示期間の種類 */
 export type PeriodKey = 'all' | '3y' | '1y' | '3m' | '1m'
@@ -115,6 +131,9 @@ export function buildMomentum(
       minExp: 0,
       maxExp: 0,
       latestExp: 0,
+      minLv: 1,
+      maxLv: 1,
+      latestLv: 1,
       weekDelta: 0,
       weekPct: 0,
       months: [],
@@ -150,6 +169,10 @@ export function buildMomentum(
   const last = points[points.length - 1]
   if (last) last.exp = total
 
+  // レベル推移（curve 指定時のみ）。各点の累計EXPを小数レベルに変換する。
+  const curve = input.levelCurve
+  if (curve) for (const p of points) p.lv = lvFloat(p.exp, curve)
+
   const weekCut = endMs - 7 * DAY_MS
   const weekDelta = events.filter((e) => e.t > weekCut).reduce((s, e) => s + e.v, 0)
   const prev = total - weekDelta
@@ -178,6 +201,9 @@ export function buildMomentum(
     minExp: baseline,
     maxExp: total,
     latestExp: total,
+    minLv: curve ? lvFloat(baseline, curve) : 1,
+    maxLv: curve ? lvFloat(total, curve) : 1,
+    latestLv: curve ? lvFloat(total, curve) : 1,
     weekDelta,
     weekPct,
     months,

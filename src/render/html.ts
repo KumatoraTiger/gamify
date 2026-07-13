@@ -1,13 +1,14 @@
 /**
  * レポートを単体で開ける HTML ダッシュボード（cockpit）に整形する。
- * レベル/キャラ・ステータス・装備・勢い(全期間EXP)・冒険マップ(登山)・街(スカイライン)・
+ * レベル/キャラ・ステータス・装備・勢い(EXP/レベル推移)・冒険マップ(登山)・街(スカイライン)・
  * 週次アクティビティ・クエスト・バッジを描画する。すべて実データ駆動。
  */
 
 import type { Character } from '../domain/character'
 import type { CityState } from '../domain/city'
 import type { JourneyState, Terrain } from '../domain/journey'
-import type { MomentumSeries } from '../domain/momentum'
+import type { LevelInfo } from '../domain/level'
+import type { MomentumSeries, PeriodKey } from '../domain/momentum'
 import type { DevReport } from '../domain/report'
 
 const esc = (s: string): string =>
@@ -76,6 +77,15 @@ const MOM_H = 170
 const MOM_BASE = 140
 const MOM_TOP = 18
 
+/** 勢いチャートの指標（EXP累計 / レベル推移）。先頭がデフォルト表示 */
+type MetricKey = 'exp' | 'lv'
+const METRICS: { key: MetricKey; label: string; color: string }[] = [
+  { key: 'exp', label: 'EXP', color: '#E6B450' },
+  { key: 'lv', label: 'レベル', color: '#5FA8D8' },
+]
+/** 期間タブの初期選択（勢いは直近1ヶ月をデフォルト表示にする） */
+const DEFAULT_PERIOD: PeriodKey = '1m'
+
 // y軸の「きりのいい」XP目盛りを ~3 区切りで求める。
 function niceYTicks(min: number, max: number): number[] {
   const range = max - min
@@ -91,34 +101,51 @@ function niceYTicks(min: number, max: number): number[] {
   return ticks
 }
 
-// 1期間ぶんの折れ線チャート（mview divごと）を描く。
-// 折れ線は minExp（期間開始時点の累計）〜maxExp の範囲を縦幅いっぱいに使う。
-// y軸のXP目盛り(HTML)とホバー用オーバーレイ(cross/dot/tip)、ホバー用の座標データを持たせる。
-function momentumChart(s: MomentumSeries): string {
+// y軸の整数レベル目盛りを ~4 区切りで求める（レベル表示用）。
+function niceLevelTicks(min: number, max: number): number[] {
+  const lo = Math.floor(min)
+  const hi = Math.ceil(max)
+  const range = hi - lo
+  if (range <= 0) return [Math.round(min)]
+  const step = Math.max(1, Math.round(range / 4))
+  const ticks: number[] = []
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) ticks.push(v)
+  return ticks
+}
+
+// 1期間×1指標ぶんの折れ線チャート（mview divごと）を描く。
+// 折れ線は指標の下端〜上端（期間開始時点〜今）の範囲を縦幅いっぱいに使う。
+// y軸目盛り(HTML)とホバー用オーバーレイ(cross/dot/tip)、ホバー用の座標データを持たせる。
+function momentumChart(s: MomentumSeries, metric: MetricKey): string {
   const m = s.momentum
+  const isLv = metric === 'lv'
+  const color = isLv ? '#5FA8D8' : '#E6B450'
   const W = MOM_W
   const base = MOM_BASE
   const top = MOM_TOP
   const mid = (base + top) / 2
-  const gid = `mg-${s.key}`
+  const gid = `mg-${s.key}-${metric}`
   const span = m.endMs - m.startMs || 1
-  const rng = m.maxExp - m.minExp
-  const yOf = (exp: number): number =>
-    rng > 0 ? base - ((exp - m.minExp) / rng) * (base - top) : mid
-  const xy = m.points.map((p) => [((p.tMs - m.startMs) / span) * W, yOf(p.exp)] as const)
+  const minV = isLv ? m.minLv : m.minExp
+  const maxV = isLv ? m.maxLv : m.maxExp
+  const rng = maxV - minV
+  const valOf = (p: (typeof m.points)[number]): number => (isLv ? (p.lv ?? 1) : p.exp)
+  const yOf = (v: number): number => (rng > 0 ? base - ((v - minV) / rng) * (base - top) : mid)
+  const xy = m.points.map((p) => [((p.tMs - m.startMs) / span) * W, yOf(valOf(p))] as const)
   const line = xy.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
   const first = xy[0] ?? [0, base]
   const lastP = xy[xy.length - 1] ?? [W, base]
   const area = `${first[0].toFixed(1)},${base} ${line} ${lastP[0].toFixed(1)},${base}`
 
-  // y軸: きりのいいXP値で水平グリッド＋ラベル
+  // y軸: きりのいい値で水平グリッド＋ラベル（EXP は数値、レベルは Lv.N）
   let hGrid = ''
   let yLabels = ''
-  for (const t of niceYTicks(m.minExp, m.maxExp)) {
-    const ty = rng > 0 ? base - ((t - m.minExp) / rng) * (base - top) : mid
+  const ticks = isLv ? niceLevelTicks(minV, maxV) : niceYTicks(minV, maxV)
+  for (const t of ticks) {
+    const ty = rng > 0 ? base - ((t - minV) / rng) * (base - top) : mid
     if (ty < top - 1 || ty > base + 1) continue
     hGrid += `<line x1="0" y1="${ty.toFixed(1)}" x2="${W}" y2="${ty.toFixed(1)}" stroke="#2E3342" stroke-dasharray="3 6"/>`
-    yLabels += `<span class="ytick" style="top:${ty.toFixed(1)}px">${nf(t)}</span>`
+    yLabels += `<span class="ytick" style="top:${ty.toFixed(1)}px">${isLv ? `Lv.${t}` : nf(t)}</span>`
   }
 
   const vGrid = m.months
@@ -133,66 +160,77 @@ function momentumChart(s: MomentumSeries): string {
   const picked = m.months.filter((_, i) => i % step === 0)
   const axis = `<span>開始</span>${picked.map((mo) => `<span>${esc(mo.label)}</span>`).join('')}<span>今</span>`
 
-  // ホバー用: [viewBox x, viewBox y, 累計EXP, 時刻ms] の並び。JS が最近傍点を引く。
+  // ホバー用: [viewBox x, viewBox y, 表示値, 時刻ms] の並び。JS が最近傍点を引く。
+  // 表示値は EXP は累計EXP、レベルは整数レベル（小数を切り捨て）。
   const dp = m.points.map((p, i) => [
     Number(xy[i]![0].toFixed(1)),
     Number(xy[i]![1].toFixed(1)),
-    p.exp,
+    isLv ? Math.floor(valOf(p)) : p.exp,
     p.tMs,
   ])
 
   return `
-  <div class="mview mv-${s.key}" data-points='${JSON.stringify(dp)}'>
+  <div class="mview mv-${s.key} met-${metric}" data-metric="${metric}" data-points='${JSON.stringify(dp)}'>
     <div class="yaxis">${yLabels}</div>
     <span class="mcross"></span><span class="mdot"></span><span class="mtip"></span>
     <svg viewBox="0 0 ${W} ${MOM_H}" preserveAspectRatio="none" aria-hidden="true">
       <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#E6B450" stop-opacity="0.32"/>
-        <stop offset="1" stop-color="#E6B450" stop-opacity="0"/></linearGradient></defs>
+        <stop offset="0" stop-color="${color}" stop-opacity="0.32"/>
+        <stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
       <line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="#2E3342"/>
       ${hGrid}
       ${vGrid}
       <polygon points="${area}" fill="url(#${gid})"/>
-      <polyline points="${line}" fill="none" stroke="#E6B450" stroke-width="2.6"/>
-      <circle cx="${lastP[0].toFixed(1)}" cy="${lastP[1].toFixed(1)}" r="4.5" fill="#E6B450"/>
+      <polyline points="${line}" fill="none" stroke="${color}" stroke-width="2.6"/>
+      <circle cx="${lastP[0].toFixed(1)}" cy="${lastP[1].toFixed(1)}" r="4.5" fill="${color}"/>
     </svg>
     <div class="xaxis">${axis}</div>
   </div>`
 }
 
-// 期間タブ付きの勢いカード。全期間分を事前描画し、CSSラジオで切り替える。
+// 期間タブ＋指標タブ付きの勢いカード。全期間×全指標を事前描画し、CSSラジオで切り替える。
 // 折れ線ホバーのツールチップだけ末尾のインラインJS（momentumHoverScript）が担当する。
-function momentumCard(series: MomentumSeries[]): string {
+function momentumCard(series: MomentumSeries[], level: LevelInfo): string {
   if (series.length === 0) return ''
   // 大きな数字（現在の累計）と今週デルタは期間非依存なので先頭系列から取る
   const head = series[0]!.momentum
   const up = head.weekDelta >= 0
   const chg = `${up ? '▲' : '▼'} ${up ? '+' : ''}${head.weekDelta} XP (${up ? '+' : ''}${head.weekPct.toFixed(1)}%) 今週`
 
-  const radios = series
+  const pRadios = series
     .map(
-      (s, i) =>
-        `<input class="mr" type="radio" name="mrange" id="mr-${s.key}"${i === 0 ? ' checked' : ''}>`,
+      (s) =>
+        `<input class="mr" type="radio" name="mrange" id="mr-${s.key}"${s.key === DEFAULT_PERIOD ? ' checked' : ''}>`,
     )
     .join('')
-  const labels = series
+  const mRadios = METRICS.map(
+    (mt, i) =>
+      `<input class="mr" type="radio" name="mmetric" id="mm-${mt.key}"${i === 0 ? ' checked' : ''}>`,
+  ).join('')
+  const pLabels = series
     .map((s) => `<label for="mr-${s.key}" class="r-${s.key}">${esc(s.label)}</label>`)
     .join('')
-  const views = series.map(momentumChart).join('')
+  const mLabels = METRICS.map(
+    (mt) => `<label for="mm-${mt.key}" class="rm-${mt.key}">${esc(mt.label)}</label>`,
+  ).join('')
+  const views = series.flatMap((s) => METRICS.map((mt) => momentumChart(s, mt.key))).join('')
 
   return `
   <div class="card momentum">
-    ${radios}
+    ${pRadios}${mRadios}
     <div class="pxrow">
-      <span class="px">${nf(head.latestExp)}</span><span class="chg">${chg}</span>
-      <span class="ranges">${labels}</span>
+      <span class="head head-exp"><span class="px">${nf(head.latestExp)}</span><span class="chg">${chg}</span></span>
+      <span class="head head-lv"><span class="px">Lv.${level.level}</span><span class="chg">次のLvまで ${nf(level.toNext)} XP</span></span>
+      <span class="metrics">${mLabels}</span>
+      <span class="ranges">${pLabels}</span>
     </div>
     ${views}
   </div>`
 }
 
 // 折れ線ホバー用のインラインJS。カーソル位置に最も近いサンプル点を求め、
-// 縦カーソル線・点・ツールチップ（日付＋累計XP）を表示する。CSPの無いローカルHTMLで動く。
+// 縦カーソル線・点・ツールチップ（日付＋値）を表示する。CSPの無いローカルHTMLで動く。
+// data-metric に応じて値の単位（XP / Lv.）を切り替える。
 function momentumHoverScript(): string {
   return `<script>
 (function(){
@@ -201,6 +239,7 @@ function momentumHoverScript(): string {
   var views=document.querySelectorAll('.momentum .mview');
   for(var v=0;v<views.length;v++){(function(view){
     var svg=view.querySelector('svg');
+    var isLv=view.getAttribute('data-metric')==='lv';
     var pts;try{pts=JSON.parse(view.getAttribute('data-points')||'[]')}catch(e){pts=[]}
     if(!svg||!pts.length)return;
     var cross=view.querySelector('.mcross'),dot=view.querySelector('.mdot'),tip=view.querySelector('.mtip');
@@ -215,7 +254,7 @@ function momentumHoverScript(): string {
       cross.style.left=px+'px';
       dot.style.left=px+'px';dot.style.top=py+'px';
       tip.style.left=px+'px';tip.style.top=py+'px';
-      tip.innerHTML=fd(p[3])+'<br>'+nf(p[2])+' XP';
+      tip.innerHTML=fd(p[3])+'<br>'+(isLv?('Lv.'+p[2]):(nf(p[2])+' XP'));
       view.classList.add('hovering');
     });
     view.addEventListener('mouseleave',function(){view.classList.remove('hovering')});
@@ -689,17 +728,23 @@ export function renderHtml(projectName: string, r: DevReport): string {
   .slot .rar.sr{background:var(--purple);color:#fff}.slot .rar.r{background:var(--sky)}
   .slot .src{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:10px}
   .momentum{padding:18px 22px 14px}
-  .momentum .pxrow{display:flex;align-items:baseline;gap:12px;margin-bottom:8px}
+  .momentum .pxrow{display:flex;align-items:baseline;gap:12px;margin-bottom:8px;flex-wrap:wrap}
+  .momentum .head{display:flex;align-items:baseline;gap:12px}
+  .momentum .head-lv{display:none}
   .momentum .px{font-family:var(--mono);font-size:30px;font-weight:700;font-variant-numeric:tabular-nums}
   .momentum .chg{font-family:var(--mono);font-size:13px;color:var(--teal)}
-  .momentum .ranges{margin-left:auto;display:flex;gap:6px}
-  .momentum .ranges label{cursor:pointer;font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:6px;color:var(--faint);border:1px solid transparent;transition:color .12s,background .12s,border-color .12s}
-  .momentum .ranges label:hover{color:var(--gold)}
+  .momentum .metrics{margin-left:auto;display:flex;gap:6px}
+  .momentum .ranges{display:flex;gap:6px}
+  .momentum .metrics{padding-right:10px;margin-right:4px;border-right:1px solid var(--border)}
+  .momentum .ranges label,.momentum .metrics label{cursor:pointer;font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:6px;color:var(--faint);border:1px solid transparent;transition:color .12s,background .12s,border-color .12s}
+  .momentum .ranges label:hover,.momentum .metrics label:hover{color:var(--gold)}
   .momentum .mr{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
-  .momentum .mview{display:none}
-  .momentum #mr-all:checked~.mv-all,.momentum #mr-3y:checked~.mv-3y,.momentum #mr-1y:checked~.mv-1y,.momentum #mr-3m:checked~.mv-3m,.momentum #mr-1m:checked~.mv-1m{display:block}
+  .momentum .mview{display:none;position:relative}
+  .momentum #mr-all:checked~#mm-exp:checked~.mv-all.met-exp,.momentum #mr-3y:checked~#mm-exp:checked~.mv-3y.met-exp,.momentum #mr-1y:checked~#mm-exp:checked~.mv-1y.met-exp,.momentum #mr-3m:checked~#mm-exp:checked~.mv-3m.met-exp,.momentum #mr-1m:checked~#mm-exp:checked~.mv-1m.met-exp,.momentum #mr-all:checked~#mm-lv:checked~.mv-all.met-lv,.momentum #mr-3y:checked~#mm-lv:checked~.mv-3y.met-lv,.momentum #mr-1y:checked~#mm-lv:checked~.mv-1y.met-lv,.momentum #mr-3m:checked~#mm-lv:checked~.mv-3m.met-lv,.momentum #mr-1m:checked~#mm-lv:checked~.mv-1m.met-lv{display:block}
   .momentum #mr-all:checked~.pxrow .r-all,.momentum #mr-3y:checked~.pxrow .r-3y,.momentum #mr-1y:checked~.pxrow .r-1y,.momentum #mr-3m:checked~.pxrow .r-3m,.momentum #mr-1m:checked~.pxrow .r-1m{color:var(--gold);border-color:var(--gold-dim);background:rgba(230,180,80,.1)}
-  .momentum .mview{position:relative}
+  .momentum #mm-exp:checked~.pxrow .rm-exp,.momentum #mm-lv:checked~.pxrow .rm-lv{color:var(--gold);border-color:var(--gold-dim);background:rgba(230,180,80,.1)}
+  .momentum #mm-lv:checked~.pxrow .head-exp{display:none}
+  .momentum #mm-lv:checked~.pxrow .head-lv{display:flex}
   .momentum svg{display:block;width:100%;height:170px}
   .momentum .xaxis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:6px}
   .momentum .yaxis{position:absolute;inset:0;pointer-events:none}
@@ -708,6 +753,8 @@ export function renderHtml(projectName: string, r: DevReport): string {
   .momentum .mdot{position:absolute;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;background:var(--gold);box-shadow:0 0 0 3px rgba(230,180,80,.22);opacity:0;pointer-events:none}
   .momentum .mtip{position:absolute;transform:translate(-50%,calc(-100% - 11px));white-space:nowrap;font-family:var(--mono);font-size:11px;line-height:1.35;color:var(--text);background:var(--raised);border:1px solid var(--border);border-radius:7px;padding:5px 9px;opacity:0;pointer-events:none;z-index:3;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,.35)}
   .momentum .mview.hovering .mcross,.momentum .mview.hovering .mdot,.momentum .mview.hovering .mtip{opacity:1}
+  .momentum .met-lv .mcross{background:rgba(95,168,216,.55)}
+  .momentum .met-lv .mdot{background:var(--sky);box-shadow:0 0 0 3px rgba(95,168,216,.22)}
   .pulse{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
   .pulse .s{background:var(--panel);border:1px solid var(--border);border-radius:13px;padding:16px 17px}
   .pulse .s .k{font-family:var(--mono);font-size:11px;color:var(--muted)}
@@ -818,8 +865,8 @@ export function renderHtml(projectName: string, r: DevReport): string {
   <div class="sh"><h2>装備 / Equipment</h2><span class="line"></span><span class="hint">活動量で自動強化</span></div>
   <div class="equip">${equipmentSlots(r.character.equipment)}</div>
 
-  <div class="sh"><h2>勢い / Momentum</h2><span class="line"></span><span class="hint">活動EXP（コミット+PR）の累計推移・期間を切替</span></div>
-  ${momentumCard(r.momentums)}
+  <div class="sh"><h2>勢い / Momentum</h2><span class="line"></span><span class="hint">活動EXP（コミット+PR）の累計 / レベル推移・指標と期間を切替</span></div>
+  ${momentumCard(r.momentums, r.level)}
 
   <div class="sh"><h2>今週のアクティビティ</h2><span class="line"></span><span class="hint">git + gh から自動集計</span></div>
   <div class="pulse">

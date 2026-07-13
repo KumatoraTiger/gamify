@@ -94,6 +94,39 @@ describe('buildMomentum', () => {
     expect(MOMENTUM_PERIODS).toHaveLength(5)
   })
 
+  it('levelCurve 未指定なら lv は付かずレベル範囲は1で埋まる', () => {
+    const m = buildMomentum(
+      { commitDates: [d('2026-06-20')], prDates: [], perCommit: 5, perMergedPR: 25 },
+      today,
+    )
+    expect(m.points.every((p) => p.lv === undefined)).toBe(true)
+    expect(m.latestLv).toBe(1)
+    expect(m.minLv).toBe(1)
+  })
+
+  it('levelCurve 指定時は各点に小数レベルが付き、単調増加で最新レベルに一致する', () => {
+    const curve = { base: 150, step: 30 }
+    // 100コミット*5 = 500 EXP。base=150,step=30 → Lv1→2:150, 2→3:180, 3→4:210
+    // 累計 500 は Lv3 到達(330)後、Lv3内 170/210 進捗 → Lv3.x
+    const m = buildMomentum(
+      {
+        commitDates: Array.from({ length: 100 }, (_, i) => d(`2026-0${(i % 5) + 1}-01`)),
+        prDates: [],
+        perCommit: 5,
+        perMergedPR: 25,
+        levelCurve: curve,
+      },
+      today,
+    )
+    expect(m.points.every((p) => typeof p.lv === 'number')).toBe(true)
+    for (let i = 1; i < m.points.length; i++) {
+      expect(m.points[i]!.lv!).toBeGreaterThanOrEqual(m.points[i - 1]!.lv!)
+    }
+    // 最終点の小数レベルは latestLv と一致し、整数部は 3
+    expect(m.points.at(-1)?.lv).toBeCloseTo(m.latestLv, 5)
+    expect(Math.floor(m.latestLv)).toBe(3)
+  })
+
   it('月目盛りを範囲内で生成する', () => {
     const m = buildMomentum(
       { commitDates: [d('2026-04-10')], prDates: [], perCommit: 5, perMergedPR: 25 },

@@ -121,6 +121,7 @@ export function buildReport(config: GamifyConfig, raw: RawData): DevReport {
       prDates: raw.mergedPRDates,
       perCommit: config.exp.perCommit,
       perMergedPR: config.exp.perMergedPR,
+      levelCurve: config.levelCurve,
     },
     raw.today,
   )

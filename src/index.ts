@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { config } from '../config'
+import { countGhReleases, readMergedPRs } from './collectors/gh'
 import {
   countReleaseTags,
   detectRepoSlug,
@@ -8,7 +9,6 @@ import {
   readCommits,
   remoteDefaultRef,
 } from './collectors/git'
-import { countGhReleases, readMergedPRs } from './collectors/gh'
 import { readQuests } from './collectors/projects'
 import { buildQuestBoard } from './domain/quests'
 import { type RawData, buildReport } from './domain/report'
