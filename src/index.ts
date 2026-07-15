@@ -1,12 +1,13 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { config } from '../config'
-import { countGhReleases, readMergedPRs } from './collectors/gh'
+import { countGhReleases, readGhReleaseDates, readMergedPRs } from './collectors/gh'
 import {
   countReleaseTags,
   detectRepoSlug,
   fetchRepo,
   readCommits,
+  readReleaseTagDates,
   remoteDefaultRef,
 } from './collectors/git'
 import { readQuests } from './collectors/projects'
@@ -15,19 +16,31 @@ import { type RawData, buildReport } from './domain/report'
 import { renderHtml } from './render/html'
 import { renderTerminal } from './render/terminal'
 
-/** 設定の releaseSource に従ってリリース数を求める */
-function resolveReleases(slug: string | undefined): number {
+/**
+ * 設定の releaseSource に従ってリリース数と日時を求める。
+ * count と dates は同じソースから取るので基本一致する（日時の取れないぶんは
+ * report 側で下駄 baseExp に回る）。
+ */
+function resolveReleases(slug: string | undefined): { count: number; dates: Date[] } {
   switch (config.releaseSource ?? 'auto') {
     case 'none':
-      return 0
-    case 'tags':
-      return countReleaseTags(config.repoPath)
-    case 'gh':
-      return slug ? countGhReleases(slug) : 0
+      return { count: 0, dates: [] }
+    case 'tags': {
+      const dates = readReleaseTagDates(config.repoPath)
+      return { count: countReleaseTags(config.repoPath), dates }
+    }
+    case 'gh': {
+      const dates = slug ? readGhReleaseDates(slug) : []
+      return { count: slug ? countGhReleases(slug) : 0, dates }
+    }
     default: {
-      // auto: gh Releases を優先し、無ければタグ数に fallback
-      const gh = slug ? countGhReleases(slug) : 0
-      return gh > 0 ? gh : countReleaseTags(config.repoPath)
+      // auto: gh Releases を優先し、無ければタグに fallback
+      const ghCount = slug ? countGhReleases(slug) : 0
+      if (ghCount > 0) return { count: ghCount, dates: slug ? readGhReleaseDates(slug) : [] }
+      return {
+        count: countReleaseTags(config.repoPath),
+        dates: readReleaseTagDates(config.repoPath),
+      }
     }
   }
 }
@@ -65,7 +78,8 @@ function main(): void {
   const raw: RawData = {
     commitDates,
     mergedPRDates: prs.map((p) => p.mergedAt),
-    releases,
+    releases: releases.count,
+    releaseDates: releases.dates,
     questBoard,
     today: new Date(),
   }

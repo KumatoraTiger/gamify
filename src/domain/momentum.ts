@@ -1,9 +1,9 @@
 /**
  * 勢い（Momentum）。全期間の「活動EXPの積み上がり」を時系列で表す純粋ロジック。
  *
- * コミットとマージPRを EXP イベントとして時刻順に並べ、累計EXPの推移を
- * 一定間隔でサンプリングする。株価チャート風の折れ線を描くためのデータになる。
- * リリース/クエストEXPは日付を持たないためこの推移線には含めない（活動EXPのみ）。
+ * コミット・マージPR・（日付の取れる）リリースを EXP イベントとして時刻順に並べ、
+ * 累計EXPの推移を一定間隔でサンプリングする。株価チャート風の折れ線を描くためのデータになる。
+ * 日付を持たないEXP（クエストや日付不明のリリース）は baseExp として線全体に一律で足す。
  */
 
 import { type LevelCurve, levelFromExp } from './level'
@@ -11,10 +11,13 @@ import { type LevelCurve, levelFromExp } from './level'
 export interface MomentumInput {
   commitDates: Date[]
   prDates: Date[]
+  /** 日付の取れるリリース（折れ線にスパイクとして載る。日付不明分は baseExp 側へ） */
+  releaseDates?: Date[]
   perCommit: number
   perMergedPR: number
+  perRelease?: number
   /**
-   * 日付を持たない非活動EXP（リリース/クエスト）の合計。折れ線全体に一律で足す
+   * 日付を持たない非活動EXP（クエスト＋日付不明のリリース）の合計。折れ線全体に一律で足す
    * 「下駄」として扱う。これにより線の終点＝総EXPになり、見出しの Lv が左上の Lv と一致する。
    */
   baseExp?: number
@@ -120,6 +123,8 @@ export function buildMomentum(
   const events: { t: number; v: number }[] = []
   for (const d of input.commitDates) events.push({ t: d.getTime(), v: input.perCommit })
   for (const d of input.prDates) events.push({ t: d.getTime(), v: input.perMergedPR })
+  for (const d of input.releaseDates ?? [])
+    events.push({ t: d.getTime(), v: input.perRelease ?? 0 })
   events.sort((a, b) => a.t - b.t)
 
   const endMs = today.getTime()

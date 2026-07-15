@@ -147,6 +147,32 @@ describe('buildMomentum', () => {
     expect(lifted.maxExp).toBe(plain.maxExp + 190)
   })
 
+  it('releaseDates は折れ線にスパイクとして載り、下駄と二重計上されない', () => {
+    // 活動 2コミット*5=10、リリース1件*100 を日付付きで、クエスト90は下駄
+    const withRelease = buildMomentum(
+      {
+        commitDates: [d('2026-01-01'), d('2026-06-20')],
+        prDates: [],
+        releaseDates: [d('2026-03-15')],
+        perCommit: 5,
+        perMergedPR: 25,
+        perRelease: 100,
+        baseExp: 90, // クエストぶんのみ（リリースは日付付きなので下駄に入れない）
+      },
+      today,
+    )
+    // 終点 = 活動10 + リリース100 + クエスト90 = 200
+    expect(withRelease.latestExp).toBe(200)
+    // リリース日(3/15)より前後で段差ができる（単調増加）
+    for (let i = 1; i < withRelease.points.length; i++) {
+      expect(withRelease.points[i]!.exp).toBeGreaterThanOrEqual(withRelease.points[i - 1]!.exp)
+    }
+    // リリース前の点は 活動分 + 下駄90 未満+α、リリース後は +100 されている
+    const before = withRelease.points.find((p) => p.tMs < d('2026-03-15').getTime())!
+    const after = withRelease.points.filter((p) => p.tMs >= d('2026-03-15').getTime()).at(-1)!
+    expect(after.exp - before.exp).toBeGreaterThanOrEqual(100)
+  })
+
   it('baseExp 指定時の最新レベルは 活動EXP+下駄 の総EXPから決まる', () => {
     const curve = { base: 150, step: 30 }
     // 活動EXP 5325（左上の総EXP 5515 との差 190 が下駄）→ 総5515 は Lv16（Lv16床=5400）

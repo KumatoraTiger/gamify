@@ -78,6 +78,25 @@ export function countReleaseTags(repoPath: string): number {
   }
 }
 
+/** `v*` 形式のリリースタグの作成日時を返す（勢いの折れ線にリリースを載せる用） */
+export function readReleaseTagDates(repoPath: string): Date[] {
+  try {
+    const out = git(repoPath, [
+      'for-each-ref',
+      '--sort=creatordate',
+      '--format=%(creatordate:iso-strict)',
+      'refs/tags/v*',
+    ])
+    return out
+      .split('\n')
+      .filter(Boolean)
+      .map((s) => new Date(s.trim()))
+      .filter((d) => !Number.isNaN(d.getTime()))
+  } catch {
+    return []
+  }
+}
+
 /** origin の URL から owner/repo を取り出す */
 export function detectRepoSlug(repoPath: string): string | undefined {
   try {

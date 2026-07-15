@@ -18,6 +18,8 @@ export interface RawData {
   commitDates: Date[]
   mergedPRDates: Date[]
   releases: number
+  /** リリースの日時（取れた分だけ）。勢いの折れ線にスパイクとして載る */
+  releaseDates?: Date[]
   users?: number
   coverage?: number
   questBoard?: QuestBoard
@@ -105,11 +107,14 @@ export function buildReport(config: GamifyConfig, raw: RawData): DevReport {
   }
 
   const level = levelFromExp(totalExp, config.levelCurve)
-  // 折れ線は日付を持つ活動EXP（コミット+PR）を時系列で追う。日付を持たない
-  // 非活動EXP（リリース/クエスト）は「下駄」として線全体に一律で足すので、線の終点＝総EXP
-  // になり、勢いカードの見出し Lv は左上の Lv（total 由来）と一致する。
+  // 折れ線は日付を持つEXP（コミット+PR、および日時の取れたリリース）を時系列で追う。
+  // 日付が取れないぶん（クエスト＋日時不明のリリース）は「下駄」baseExp として線全体に
+  // 一律で足す。dated分 + 下駄 = totalExp なので、線の終点＝総EXP、勢いの見出し Lv は
+  // 左上の Lv（total 由来）と一致する。
   const activityExp = computeTotalExp(config.exp, { commits: totalCommits, mergedPRs, releases: 0 })
-  const baseExp = totalExp - activityExp
+  const releaseDates = raw.releaseDates ?? []
+  const datedReleaseExp = releaseDates.length * config.exp.perRelease
+  const baseExp = totalExp - activityExp - datedReleaseExp
   const momentumLevel = level
   const longest = longestStreak(dayKeys)
 
@@ -127,8 +132,10 @@ export function buildReport(config: GamifyConfig, raw: RawData): DevReport {
     {
       commitDates: raw.commitDates,
       prDates: raw.mergedPRDates,
+      releaseDates,
       perCommit: config.exp.perCommit,
       perMergedPR: config.exp.perMergedPR,
+      perRelease: config.exp.perRelease,
       baseExp,
       levelCurve: config.levelCurve,
     },

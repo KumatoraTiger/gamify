@@ -49,3 +49,24 @@ export function countGhReleases(repoSlug: string): number {
     return 0
   }
 }
+
+/**
+ * GitHub Releases の公開日時を返す（勢いの折れ線にリリースを載せる用）。
+ * draft 等で published_at が無いものは created_at にフォールバックする。
+ */
+export function readGhReleaseDates(repoSlug: string): Date[] {
+  try {
+    const out = execFileSync(
+      'gh',
+      ['api', `repos/${repoSlug}/releases`, '--jq', '.[].published_at // .created_at'],
+      { encoding: 'utf8' },
+    )
+    return out
+      .split('\n')
+      .filter(Boolean)
+      .map((s) => new Date(s.trim()))
+      .filter((d) => !Number.isNaN(d.getTime()))
+  } catch {
+    return []
+  }
+}
