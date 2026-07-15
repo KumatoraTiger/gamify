@@ -13,6 +13,11 @@ export interface MomentumInput {
   prDates: Date[]
   perCommit: number
   perMergedPR: number
+  /**
+   * 日付を持たない非活動EXP（リリース/クエスト）の合計。折れ線全体に一律で足す
+   * 「下駄」として扱う。これにより線の終点＝総EXPになり、見出しの Lv が左上の Lv と一致する。
+   */
+  baseExp?: number
   /** 指定するとレベル推移も算出する（レベル表示タブ用） */
   levelCurve?: LevelCurve
 }
@@ -119,21 +124,24 @@ export function buildMomentum(
 
   const endMs = today.getTime()
   const total = events.reduce((s, e) => s + e.v, 0)
+  // 非活動EXP（日付なし）の下駄。折れ線の全ポイントに一律で加算する。
+  const base = input.baseExp ?? 0
+  const curve = input.levelCurve
 
   if (events.length === 0) {
     return {
       points: [
-        { tMs: endMs - DAY_MS, exp: 0 },
-        { tMs: endMs, exp: 0 },
+        { tMs: endMs - DAY_MS, exp: base },
+        { tMs: endMs, exp: base },
       ],
       startMs: endMs - DAY_MS,
       endMs,
-      minExp: 0,
-      maxExp: 0,
-      latestExp: 0,
-      minLv: 1,
-      maxLv: 1,
-      latestLv: 1,
+      minExp: base,
+      maxExp: base,
+      latestExp: base,
+      minLv: curve ? lvFloat(base, curve) : 1,
+      maxLv: curve ? lvFloat(base, curve) : 1,
+      latestLv: curve ? lvFloat(base, curve) : 1,
       weekDelta: 0,
       weekPct: 0,
       months: [],
@@ -169,13 +177,16 @@ export function buildMomentum(
   const last = points[points.length - 1]
   if (last) last.exp = total
 
-  // レベル推移（curve 指定時のみ）。各点の累計EXPを小数レベルに変換する。
-  const curve = input.levelCurve
+  // 非活動EXPの下駄を全ポイントに足す（線の形は不変、終点＝総EXPになる）
+  if (base) for (const p of points) p.exp += base
+
+  // レベル推移（curve 指定時のみ）。下駄込みの累計EXPを小数レベルに変換する。
   if (curve) for (const p of points) p.lv = lvFloat(p.exp, curve)
 
   const weekCut = endMs - 7 * DAY_MS
   const weekDelta = events.filter((e) => e.t > weekCut).reduce((s, e) => s + e.v, 0)
-  const prev = total - weekDelta
+  // 増加率は「今の総EXP（下駄込み）に対する今週ぶん」で見る
+  const prev = total + base - weekDelta
   const weekPct = prev > 0 ? (weekDelta / prev) * 100 : weekDelta > 0 ? 100 : 0
 
   // 月目盛り（各月初のタイムライン上の位置）
@@ -198,12 +209,12 @@ export function buildMomentum(
     points,
     startMs,
     endMs,
-    minExp: baseline,
-    maxExp: total,
-    latestExp: total,
-    minLv: curve ? lvFloat(baseline, curve) : 1,
-    maxLv: curve ? lvFloat(total, curve) : 1,
-    latestLv: curve ? lvFloat(total, curve) : 1,
+    minExp: baseline + base,
+    maxExp: total + base,
+    latestExp: total + base,
+    minLv: curve ? lvFloat(baseline + base, curve) : 1,
+    maxLv: curve ? lvFloat(total + base, curve) : 1,
+    latestLv: curve ? lvFloat(total + base, curve) : 1,
     weekDelta,
     weekPct,
     months,

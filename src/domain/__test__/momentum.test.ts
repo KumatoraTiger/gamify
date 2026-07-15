@@ -127,6 +127,56 @@ describe('buildMomentum', () => {
     expect(Math.floor(m.latestLv)).toBe(3)
   })
 
+  it('baseExp（非活動EXPの下駄）は線全体に一律で足され、終点＝活動EXP+下駄になる', () => {
+    const input = {
+      commitDates: [d('2026-01-01'), d('2026-06-20')],
+      prDates: [],
+      perCommit: 5,
+      perMergedPR: 25,
+    }
+    const plain = buildMomentum(input, today)
+    const lifted = buildMomentum({ ...input, baseExp: 190 }, today)
+    // 活動EXP 2*5=10。下駄190で終点は200
+    expect(plain.latestExp).toBe(10)
+    expect(lifted.latestExp).toBe(200)
+    // 各点が一律 +190（＝線の形は不変）
+    for (let i = 0; i < plain.points.length; i++) {
+      expect(lifted.points[i]!.exp).toBe(plain.points[i]!.exp + 190)
+    }
+    expect(lifted.minExp).toBe(plain.minExp + 190)
+    expect(lifted.maxExp).toBe(plain.maxExp + 190)
+  })
+
+  it('baseExp 指定時の最新レベルは 活動EXP+下駄 の総EXPから決まる', () => {
+    const curve = { base: 150, step: 30 }
+    // 活動EXP 5325（左上の総EXP 5515 との差 190 が下駄）→ 総5515 は Lv16（Lv16床=5400）
+    const m = buildMomentum(
+      {
+        commitDates: Array.from({ length: 1065 }, () => d('2026-06-20')),
+        prDates: [],
+        perCommit: 5,
+        perMergedPR: 25,
+        baseExp: 190,
+        levelCurve: curve,
+      },
+      today,
+    )
+    expect(m.latestExp).toBe(5325 + 190)
+    expect(Math.floor(m.latestLv)).toBe(16)
+    // 下駄が無ければ活動EXP 5325 は Lv15 に留まる
+    const noBase = buildMomentum(
+      {
+        commitDates: Array.from({ length: 1065 }, () => d('2026-06-20')),
+        prDates: [],
+        perCommit: 5,
+        perMergedPR: 25,
+        levelCurve: curve,
+      },
+      today,
+    )
+    expect(Math.floor(noBase.latestLv)).toBe(15)
+  })
+
   it('月目盛りを範囲内で生成する', () => {
     const m = buildMomentum(
       { commitDates: [d('2026-04-10')], prDates: [], perCommit: 5, perMergedPR: 25 },
