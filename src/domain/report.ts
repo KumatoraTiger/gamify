@@ -15,7 +15,13 @@ import { countWithin, dailyCounts } from './stats'
 import { currentStreak, longestStreak, uniqueDayKeys } from './streak'
 
 export interface RawData {
+  /** デフォルトブランチに着地したコミット日。EXP・累計・勢いの源（着地ベース） */
   commitDates: Date[]
+  /**
+   * 全ブランチから集めた「稼働」コミット日（個人の作業中も含む）。
+   * ストリークと今週のコミット数だけこちらを使う。未指定なら commitDates に fallback。
+   */
+  workCommitDates?: Date[]
   mergedPRDates: Date[]
   releases: number
   /** リリースの日時（取れた分だけ）。勢いの折れ線にスパイクとして載る */
@@ -81,11 +87,16 @@ export function buildReport(config: GamifyConfig, raw: RawData): DevReport {
       releases: raw.releases,
     }) + questExp
 
-  const dayKeys = uniqueDayKeys(raw.commitDates)
-  const weekCommits = countWithin(raw.commitDates, raw.today, 7)
+  // ストリークと今週のコミット数は「稼働」ベース（全ブランチ・個人の作業中も含む）。
+  // EXP・累計・勢いは着地ベース（commitDates）のまま。
+  const workDates = raw.workCommitDates ?? raw.commitDates
+  const dayKeys = uniqueDayKeys(workDates)
+  const weekCommits = countWithin(workDates, raw.today, 7)
   const weekPRs = countWithin(raw.mergedPRDates, raw.today, 7)
+  // 週EXP は着地ベースの週コミット数から算出する（表示上の weekCommits とは別）。
+  const landedWeekCommits = countWithin(raw.commitDates, raw.today, 7)
   const weekExp = computeTotalExp(config.exp, {
-    commits: weekCommits,
+    commits: landedWeekCommits,
     mergedPRs: weekPRs,
     releases: 0,
   })
@@ -154,7 +165,7 @@ export function buildReport(config: GamifyConfig, raw: RawData): DevReport {
     longestStreak: longest,
     weekCommits,
     weekPRs,
-    dailyCommitCounts: dailyCounts(raw.commitDates, raw.today, 7),
+    dailyCommitCounts: dailyCounts(workDates, raw.today, 7),
     releases: raw.releases,
     mergedPRs,
     questExp,

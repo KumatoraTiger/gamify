@@ -48,12 +48,7 @@ export function fetchRepo(repoPath: string): boolean {
   }
 }
 
-/** コミットを読む。ref 指定時はその ref から辿る（未指定ならチェックアウト中の HEAD） */
-export function readCommits(repoPath: string, author?: string, ref?: string): CommitInfo[] {
-  const args = ['log', `--pretty=format:%H${UNIT}%cI${UNIT}%an${UNIT}%s`, '--no-merges']
-  if (author) args.push(`--author=${author}`)
-  if (ref) args.push(ref)
-  const out = git(repoPath, args)
+function parseCommitLog(out: string): CommitInfo[] {
   return out
     .split('\n')
     .filter(Boolean)
@@ -66,6 +61,28 @@ export function readCommits(repoPath: string, author?: string, ref?: string): Co
         subject: subject ?? '',
       }
     })
+}
+
+/** コミットを読む。ref 指定時はその ref から辿る（未指定ならチェックアウト中の HEAD） */
+export function readCommits(repoPath: string, author?: string, ref?: string): CommitInfo[] {
+  const args = ['log', `--pretty=format:%H${UNIT}%cI${UNIT}%an${UNIT}%s`, '--no-merges']
+  if (author) args.push(`--author=${author}`)
+  if (ref) args.push(ref)
+  return parseCommitLog(git(repoPath, args))
+}
+
+/**
+ * 全ブランチ（リモート追跡ブランチ含む）から author のコミットを読む。
+ * デフォルトブランチに未着地の「作業中」コミットまで拾うので、着地ベースの
+ * readCommits と違い「今どれだけ手を動かしているか（稼働）」の可視化に使う。
+ * --all はコミットグラフを辿るので同一コミットの重複はない（ただし squash/rebase
+ * 後はブランチ側と着地側が別コミットとして両方現れる＝作業の実回数として数える）。
+ * author 未指定だと全員のコミットになる点に注意（本来は個人の稼働を見る用途）。
+ */
+export function readWorkCommits(repoPath: string, author?: string): CommitInfo[] {
+  const args = ['log', `--pretty=format:%H${UNIT}%cI${UNIT}%an${UNIT}%s`, '--no-merges', '--all']
+  if (author) args.push(`--author=${author}`)
+  return parseCommitLog(git(repoPath, args))
 }
 
 /** `v*` 形式のリリースタグ数を返す */

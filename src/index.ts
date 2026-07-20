@@ -8,6 +8,7 @@ import {
   fetchRepo,
   readCommits,
   readReleaseTagDates,
+  readWorkCommits,
   remoteDefaultRef,
 } from './collectors/git'
 import { readQuests } from './collectors/projects'
@@ -56,6 +57,8 @@ function main(): void {
   // origin のデフォルトブランチを読む。無ければチェックアウト中の HEAD にフォールバック
   const ref = remoteDefaultRef(config.repoPath)
   const commits = readCommits(config.repoPath, config.author, ref)
+  // ストリーク・今週のコミット用に、全ブランチから個人の「稼働」コミットも集める
+  const workCommits = readWorkCommits(config.repoPath, config.author)
   const releases = resolveReleases(slug)
   const prs = slug ? readMergedPRs(slug, config.ghAuthor) : []
 
@@ -77,6 +80,7 @@ function main(): void {
 
   const raw: RawData = {
     commitDates,
+    workCommitDates: workCommits.map((c) => c.date),
     mergedPRDates: prs.map((p) => p.mergedAt),
     releases: releases.count,
     releaseDates: releases.dates,
